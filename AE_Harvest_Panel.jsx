@@ -36,6 +36,7 @@
     var N_EMIT    = "AEH_EMIT";
     var N_EMITANC = "AEH_EMIT_ANCHOR"; // anchor-driven parent of AEH_EMIT
     var N_COLLECT = "AEH_COLLECT";
+    var N_COLLANC = "AEH_COLLECT_ANCHOR"; // bar-driven parent of AEH_COLLECT
     var N_FLASH   = "AEH_FLASH";     // legacy name, removed on rebuild
     var N_GLOW    = "AEH_GLOW";      // blurred glowing ring around the bar
     var N_COUNTER = "AEH_COUNTER";
@@ -418,7 +419,10 @@
         ].join("\n");
     }
 
-    function exCollectPosition() {
+    // Drives AEH_COLLECT_ANCHOR, the shy PARENT of AEH_COLLECT. Same deal as
+    // the emitter: the anchor keeps the point glued to the bar's box, while
+    // AEH_COLLECT itself stays expression-free so it can be dragged/keyframed.
+    function exCollectAnchorPosition() {
         return [
             'var B = thisComp.layer("' + N_BAR + '");',
             'var S = thisComp.layer("' + N_SETUP + '");',
@@ -538,12 +542,28 @@
             tr.property("ADBE Position").expression = exBarPosition();
             tr.property("ADBE Scale").expression = exBarScale();
 
+            // Collect = free null riding a shy bar-driven parent, so it can be
+            // dragged and keyframed while still following the bar.
+            var cAnc = findLayer(comp, N_COLLANC);
+            if (!cAnc) {
+                cAnc = comp.layers.addNull(comp.duration);
+                cAnc.name = N_COLLANC; cAnc.label = 8;
+                cAnc.guideLayer = true; cAnc.shy = true;
+            }
+            cAnc.property("ADBE Transform Group").property("ADBE Position").expression = exCollectAnchorPosition();
+
             var col = findLayer(comp, N_COLLECT);
             if (!col) {
                 col = comp.layers.addNull(comp.duration);
-                col.name = N_COLLECT; col.label = 11; col.guideLayer = true; col.shy = true;
+                col.name = N_COLLECT; col.label = 11;
             }
-            col.property("ADBE Transform Group").property("ADBE Position").expression = exCollectPosition();
+            col.guideLayer = true;
+            col.shy = false;
+            var cp = col.property("ADBE Transform Group").property("ADBE Position");
+            cp.expression = "";            // hand-placeable + keyframable
+            col.parent = cAnc;
+            if (cp.numKeys === 0) cp.setValue([0, 0]); // sit on the anchor; keep any animation
+            col.moveBefore(cAnc);
 
             // Emitter = free null riding a shy anchor-driven parent, so it can
             // be dragged and keyframed while still surviving comp resizes.
@@ -606,6 +626,12 @@
             try { blur.property("Repeat Edge Pixels").setValue(1); } catch (eB) {}
 
             glow.moveAfter(findLayer(comp, N_BAR)); // behind the bar
+
+            // Rebuilding the rig changes how coins must read the endpoints
+            // (e.g. parenting made positions parent-relative), so refresh any
+            // existing flock right here instead of relying on a manual step 3.
+            var tpl = findLayer(comp, N_COINSRC);
+            if (tpl) coinsFrom(comp, tpl);
         } catch (e) {
             alert(SCRIPT_NAME + " error: " + e.toString());
         }
@@ -868,7 +894,8 @@
 
         var help = pal.add("statictext", undefined,
             "Markers: '+100' = gain (green), '-50' = spend (red).\n" +
-            "AEH_EMIT (point A) is a plain null - drag it, keyframe it freely.\n" +
+            "Spend reverses the flight: coins leave AEH_COLLECT for AEH_EMIT.\n" +
+            "AEH_EMIT and AEH_COLLECT are plain nulls - drag / keyframe both.\n" +
             "Everyday knobs are on AEH_CTRL; setup is on the shy AEH_SETUP.\n" +
             "Anchor sliders are a 3x3 grid, 1..9: 1 = top-left, 5 = center,\n" +
             "9 = bottom-right.\n" +
