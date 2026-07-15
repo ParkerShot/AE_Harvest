@@ -51,15 +51,13 @@
     // coins auto-trail across ~60% of the flight (no user knob needed)
     var TRAIL = 0.6;
 
-    // the panel's coin-count field; the count itself lives on AEH_SETUP, but
-    // that null is shy, so the field is where anyone actually sets it.
-    var uiCoins = null;
 
     // ================= parameters & defaults =================
     // One table per null: type + display name. DEFAULTS holds the shipped
     // values; "Save current as defaults" overwrites them via a sidecar file.
 
     var CTRL_PARAMS = [
+        { t: "slider", n: "Coins" },
         { t: "slider", n: "Flight Time" },
         { t: "slider", n: "Arc Height" },
         { t: "slider", n: "Grow %" },
@@ -77,7 +75,7 @@
         { t: "slider", n: "Flash Amount" },
         { t: "color",  n: "Gain Color" },
         { t: "color",  n: "Spend Color" },
-        { t: "slider", n: "Base Value" },
+        { t: "slider", n: "Counter Start" },
         { t: "slider", n: "Value per Burst" }
     ];
 
@@ -91,12 +89,12 @@
         { t: "anchor", n: "Emitter Anchor" },
         { t: "point",  n: "Emitter Offset" },
         { t: "anchor", n: "Collect Anchor" },
-        { t: "point",  n: "Collect Offset" },
-        { t: "slider", n: "Coins" }
+        { t: "point",  n: "Collect Offset" }
     ];
 
     var DEFAULTS = {
         // flight feel
+        "Coins": 8,
         "Flight Time": 0.8,
         "Arc Height": 300,
         "Grow %": 12,
@@ -117,7 +115,7 @@
         "Gain Color": [0.2, 1, 0.35, 1],
         "Spend Color": [1, 0.22, 0.22, 1],
         // counter
-        "Base Value": 0,
+        "Counter Start": 0,
         "Value per Burst": 100,
         // setup
         "Bar Anchor": 3,      // Top-Right
@@ -125,8 +123,7 @@
         "Emitter Anchor": 5,  // Center
         "Emitter Offset": [0, 0],
         "Collect Anchor": 5,  // Center of bar
-        "Collect Offset": [0, 0],
-        "Coins": 8
+        "Collect Offset": [0, 0]
     };
 
     var MATCH = {
@@ -223,23 +220,6 @@
         return 'thisComp.layer("' + N_CTRL + '").effect("' + name + '")(1)';
     }
 
-    // panel field -> AEH_SETUP, on every action that (re)spawns coins
-    function applyCoinsFromUI(setup) {
-        if (!uiCoins || !setup) return;
-        var n = parseInt(uiCoins.text, 10);
-        if (isNaN(n)) { syncCoinsToUI(setup); return; }
-        n = Math.max(1, Math.min(200, n));
-        uiCoins.text = String(n);
-        var fx = getFx(setup, "Coins");
-        if (fx) fx.property(1).setValue(n);
-    }
-
-    // AEH_SETUP -> panel field, so the panel shows the rig's real count
-    function syncCoinsToUI(setup) {
-        if (!uiCoins || !setup) return;
-        var fx = getFx(setup, "Coins");
-        if (fx) uiCoins.text = String(Math.round(fx.property(1).value));
-    }
 
     // ================= expressions =================
     // written for both engines (var only, no arrows).
@@ -247,10 +227,7 @@
     function exMarkerScan() {
         return [
             'var C = thisComp.layer("' + N_CTRL + '");',
-            'var S = thisComp.layer("' + N_SETUP + '");',
             'var d = Math.max(0.05, C.effect("Flight Time")(1).value);',
-            'var n = Math.max(1, Math.round(S.effect("Coins")(1).value));',
-            'var stag = d / n * ' + TRAIL + ';',
             'var idx = effect("Coin Index")(1).value;',
             'var mk = C.marker;',
             'var mt = 0, amt = 0, found = false;',
@@ -263,6 +240,11 @@
             '}',
             'if (isNaN(amt) || amt == 0) amt = C.effect("Value per Burst")(1).value;',
             'var spend = amt < 0;',
+            // sampled AT THE MARKER, not at `time`: Coins is animatable, and
+            // reading it live would pop coins in and out mid-flight.
+            'var n = Math.max(1, Math.round(C.effect("Coins")(1).valueAtTime(mt)));',
+            'var live = idx < n;',
+            'var stag = d / n * ' + TRAIL + ';',
             'var t0 = mt + idx * stag;',
             'var rawP = found ? clamp((time - t0) / d, 0, 1) : 0;',
             'var p = ease(rawP, 0, 1, 0, 1);'
@@ -311,7 +293,7 @@
 
     function exCoinOpacity() {
         return exMarkerScan() + "\n" +
-            '(found && rawP > 0 && rawP < 1) ? 100 : 0;';
+            '(found && live && rawP > 0 && rawP < 1) ? 100 : 0;';
     }
 
     function exCoinRotation() {
@@ -351,10 +333,7 @@
     function exPulseScan() {
         return [
             'var C = thisComp.layer("' + N_CTRL + '");',
-            'var S = thisComp.layer("' + N_SETUP + '");',
             'var d = Math.max(0.05, C.effect("Flight Time")(1).value);',
-            'var n = Math.max(1, Math.round(S.effect("Coins")(1).value));',
-            'var stag = d / n * ' + TRAIL + ';',
             'var pt = Math.max(0.05, C.effect("Pulse Time")(1).value);',
             'var mk = C.marker;',
             'var pulse = 0, pulseSpend = false;',
@@ -363,6 +342,8 @@
             '    var amt = parseFloat(mk.key(k).comment);',
             '    if (isNaN(amt) || amt == 0) amt = C.effect("Value per Burst")(1).value;',
             '    var sp = amt < 0;',
+            '    var n = Math.max(1, Math.round(C.effect("Coins")(1).valueAtTime(tb)));',
+            '    var stag = d / n * ' + TRAIL + ';',
             '    for (var i = 0; i < n; i++) {',
             '        var ta = sp ? (tb + i*stag) : (tb + i*stag + d);',
             '        var dt = time - ta;',
@@ -478,16 +459,15 @@
         compRef = compRef || "thisComp";
         return [
             'var C = ' + compRef + '.layer("' + N_CTRL + '");',
-            'var S = ' + compRef + '.layer("' + N_SETUP + '");',
             'var d = Math.max(0.05, C.effect("Flight Time")(1).value);',
-            'var n = Math.max(1, Math.round(S.effect("Coins")(1).value));',
-            'var stag = d / n * ' + TRAIL + ';',
-            'var v = C.effect("Base Value")(1).value;',
+            'var v = C.effect("Counter Start")(1).value;',
             'var mk = C.marker;',
             'for (var k = 1; k <= mk.numKeys; k++) {',
             '    var tb = mk.key(k).time;',
             '    var amt = parseFloat(mk.key(k).comment);',
             '    if (isNaN(amt) || amt == 0) amt = C.effect("Value per Burst")(1).value;',
+            '    var n = Math.max(1, Math.round(C.effect("Coins")(1).valueAtTime(tb)));',
+            '    var stag = d / n * ' + TRAIL + ';',
             '    var per = amt / n;',
             '    for (var i = 0; i < n; i++) {',
             '        var ta = (amt < 0) ? (tb + i*stag) : (tb + i*stag + d);',
@@ -515,10 +495,18 @@
             }
             for (var i = 0; i < CTRL_PARAMS.length; i++) ensureParam(ctrl, CTRL_PARAMS[i]);
 
+            // carry an older rig's "Base Value" over to the clearer name
+            var oldBase = getFx(ctrl, "Base Value");
+            if (oldBase) {
+                var cs = getFx(ctrl, "Counter Start");
+                if (cs) cs.property(1).setValue(oldBase.property(1).value);
+                removeFx(ctrl, ["Base Value"]);
+            }
+
             // clear anything from older builds / params that moved to SETUP
             removeFx(ctrl, ["Bar Anchor", "Bar Margin", "Bar Margin X", "Bar Margin Y",
                 "Bar Offset", "Emitter Anchor", "Emitter Offset", "Collect Anchor",
-                "Collect Offset", "Coins", "Stagger", "Coin Trail",
+                "Collect Offset", "Stagger", "Coin Trail",
                 "Flash Opacity", "Glow Size", "Glow Intensity"]);
 
             var setup = findLayer(comp, N_SETUP);
@@ -531,8 +519,16 @@
                 setup.moveAfter(ctrl);
             }
             for (var j = 0; j < SETUP_PARAMS.length; j++) ensureParam(setup, SETUP_PARAMS[j]);
+
+            // Coins used to live here; move an older rig's value to AEH_CTRL,
+            // where it is visible and can be keyframed.
+            var oldCoins = getFx(setup, "Coins");
+            if (oldCoins) {
+                var cc = getFx(ctrl, "Coins");
+                if (cc) cc.property(1).setValue(oldCoins.property(1).value);
+                removeFx(setup, ["Coins"]);
+            }
             comp.shyLayers = true;
-            syncCoinsToUI(setup); // show this rig's real count in the panel
         } catch (e) {
             alert(SCRIPT_NAME + " error: " + e.toString());
         }
@@ -673,10 +669,25 @@
     }
 
     // core: turn `src` into the hidden coin template and (re)spawn the flock
+    // Coins is animatable, but coin layers are physical duplicates that cannot
+    // appear mid-render. So build a pool big enough for the busiest burst:
+    // sample Coins at every marker and take the max (never below the current
+    // value, for a rig with no markers yet).
+    function coinPoolSize(ctrl) {
+        var fx = getFx(ctrl, "Coins");
+        if (!fx) throw new Error("AEH_CTRL has no 'Coins' control - re-run step 1.");
+        var p = fx.property(1);
+        var maxN = Math.round(p.value);
+        var mk = ctrl.property("ADBE Marker");
+        for (var k = 1; k <= mk.numKeys; k++) {
+            var v = Math.round(p.valueAtTime(mk.keyTime(k), false));
+            if (v > maxN) maxN = v;
+        }
+        return Math.max(1, Math.min(200, maxN));
+    }
+
     function coinsFrom(comp, src) {
-        var setup = findLayer(comp, N_SETUP);
-        var coinsFx = getFx(setup, "Coins");
-        if (!coinsFx) throw new Error("AEH_SETUP has no 'Coins' control - re-run step 1.");
+        var ctrl = findLayer(comp, N_CTRL);
         src.name = N_COINSRC;
         src.enabled = false;
         src.shy = true;
@@ -686,7 +697,7 @@
             if (nm.indexOf(N_COIN) === 0 && nm !== N_COINSRC) comp.layer(i).remove();
         }
 
-        var n = Math.max(1, Math.round(coinsFx.property(1).value));
+        var n = coinPoolSize(ctrl);
         for (var c = 0; c < n; c++) {
             var dcoin = src.duplicate();
             dcoin.name = N_COIN + (c + 1);
@@ -720,7 +731,6 @@
 
         app.beginUndoGroup(SCRIPT_NAME + ": replace coin");
         try {
-            applyCoinsFromUI(findLayer(comp, N_SETUP));
             var item = app.project.importFile(new ImportOptions(f));
             var lay = comp.layers.add(item);
             var old = findLayer(comp, N_COINSRC);
@@ -748,7 +758,6 @@
 
         app.beginUndoGroup(SCRIPT_NAME + ": coins");
         try {
-            applyCoinsFromUI(findLayer(comp, N_SETUP));
             coinsFrom(comp, src);
         } catch (e) {
             alert(SCRIPT_NAME + " error: " + e.toString());
@@ -812,7 +821,7 @@
         try {
             var td = t.property("ADBE Text Properties").property("ADBE Text Document");
             var cur = parseFloat(String(td.value.text).replace(/[^0-9.\-]/g, ""));
-            var bv = getFx(findLayer(found.comp, N_CTRL), "Base Value");
+            var bv = getFx(findLayer(found.comp, N_CTRL), "Counter Start");
             if (!isNaN(cur) && bv) bv.property(1).setValue(cur);
             td.expression = exCounterText(found.compRef);
         } catch (e) {
@@ -892,14 +901,6 @@
         var b1 = gBuild.add("button", undefined, "1. Create / update controller");
         var b2 = gBuild.add("button", undefined, "2. Selected layer -> BAR (magnet + glow)");
         var b3 = gBuild.add("button", undefined, "3. Selected layer -> coins (build / rebuild)");
-
-        var gCnt = gBuild.add("group");
-        gCnt.orientation = "row";
-        gCnt.alignChildren = ["left", "center"];
-        gCnt.add("statictext", undefined, "Coins per burst:");
-        uiCoins = gCnt.add("edittext", undefined, String(DEFAULTS["Coins"]));
-        uiCoins.characters = 4;
-        uiCoins.helpTip = "How many coins fly per burst. Applied when you build/rebuild coins.";
         var b4 = gBuild.add("button", undefined, "4. Create NEW counter text");
         var b5 = gBuild.add("button", undefined, "5. Link SELECTED text -> counter");
 
@@ -932,11 +933,14 @@
             "Everyday knobs are on AEH_CTRL; setup is on the shy AEH_SETUP.\n" +
             "Anchor sliders are a 3x3 grid, 1..9: 1 = top-left, 5 = center,\n" +
             "9 = bottom-right.\n" +
+            "Counter's starting number = 'Counter Start' on AEH_CTRL.\n" +
+            "'Coins' (AEH_CTRL) is keyframable - it is read at each marker, so\n" +
+            "bursts can differ. Raised it past the built flock? Re-run step 3.\n" +
             "Swap the coin any time: 'Replace coin artwork...' - pick a file,\n" +
             "it imports and respawns the coins by itself.\n" +
             "Have a styled counter already? Select it, use step 5.",
             { multiline: true });
-        help.preferredSize.height = 110;
+        help.preferredSize.height = 134;
 
         b1.onClick = createController;
         b2.onClick = setupBar;
