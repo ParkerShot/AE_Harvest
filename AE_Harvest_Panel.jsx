@@ -34,6 +34,7 @@
     var N_SETUP   = "AEH_SETUP";
     var N_BAR     = "AEH_BAR";
     var N_EMIT    = "AEH_EMIT";
+    var N_EMITANC = "AEH_EMIT_ANCHOR"; // anchor-driven parent of AEH_EMIT
     var N_COLLECT = "AEH_COLLECT";
     var N_FLASH   = "AEH_FLASH";     // legacy name, removed on rebuild
     var N_GLOW    = "AEH_GLOW";      // blurred glowing ring around the bar
@@ -41,11 +42,10 @@
     var N_COIN    = "AEH_COIN_";     // prefix
     var N_COINSRC = "AEH_COIN_SRC";
 
-    var ANCHOR_ITEMS = [
-        "Top-Left", "Top-Center", "Top-Right",
-        "Mid-Left", "Center", "Mid-Right",
-        "Bottom-Left", "Bottom-Center", "Bottom-Right"
-    ];
+    // Anchor sliders read 1..9 as a 3x3 grid, left-to-right, top-to-bottom:
+    //   1 Top-Left      2 Top-Center      3 Top-Right
+    //   4 Mid-Left      5 Center          6 Mid-Right
+    //   7 Bottom-Left   8 Bottom-Center   9 Bottom-Right
 
     // coins auto-trail across ~60% of the flight (no user knob needed)
     var TRAIL = 0.6;
@@ -76,12 +76,16 @@
         { t: "slider", n: "Value per Burst" }
     ];
 
+    // "anchor" = plain 1..9 slider (Top-Left .. Bottom-Right, reading rows
+    // left-to-right). Deliberately NOT a Dropdown Menu Control: its
+    // setPropertyParameters() silently fails on some AE builds, leaving a
+    // 3-item menu behind -> "Value 5 out of range 1 to 3". A slider cannot.
     var SETUP_PARAMS = [
-        { t: "menu",   n: "Bar Anchor" },
+        { t: "anchor", n: "Bar Anchor" },
         { t: "point",  n: "Bar Offset" },
-        { t: "menu",   n: "Emitter Anchor" },
+        { t: "anchor", n: "Emitter Anchor" },
         { t: "point",  n: "Emitter Offset" },
-        { t: "menu",   n: "Collect Anchor" },
+        { t: "anchor", n: "Collect Anchor" },
         { t: "point",  n: "Collect Offset" },
         { t: "slider", n: "Coins" }
     ];
@@ -122,10 +126,11 @@
 
     var MATCH = {
         slider: "ADBE Slider Control",
+        anchor: "ADBE Slider Control", // 1..9, see SETUP_PARAMS note
         point:  "ADBE Point Control",
         color:  "ADBE Color Control",
         check:  "ADBE Checkbox Control",
-        menu:   "ADBE Dropdown Control"
+        menu:   "ADBE Dropdown Control" // legacy, only used to detect & migrate
     };
 
     // ---- sidecar defaults (userData, no admin rights needed) ----
@@ -191,25 +196,22 @@
     // existing one, so user tweaks survive a re-run of step 1.
     function ensureParam(layer, spec) {
         var fx = getFx(layer, spec.n);
-        if (fx) return fx;
-        var dv = DEFAULTS[spec.n];
-        if (spec.t === "menu") {
-            try {
-                fx = fxGroup(layer).addProperty(MATCH.menu);
-                fx.name = spec.n;
-                fx.property(1).setPropertyParameters(ANCHOR_ITEMS); // invalidates refs
-                fx = getFx(layer, spec.n);
-                fx.property(1).setValue(dv);
+        if (fx) {
+            // migrate anchors built by older versions as Dropdown Menu Control:
+            // those can carry a broken 3-item menu, so rebuild them as sliders.
+            if (spec.t === "anchor" && fx.matchName === MATCH.menu) {
+                try { fx.remove(); } catch (e) { return fx; }
+            } else {
                 return fx;
-            } catch (e) {
-                // AE < 17.0.1: plain slider 1..9
-                try { if (fx) fx.remove(); } catch (e2) {}
             }
         }
+        var dv = DEFAULTS[spec.n];
         fx = fxGroup(layer).addProperty(MATCH[spec.t] || MATCH.slider);
         fx.name = spec.n;
+        fx = getFx(layer, spec.n);
+        if (!fx) throw new Error("could not create the '" + spec.n + "' control");
         if (dv !== undefined && dv !== null) fx.property(1).setValue(dv);
-        return getFx(layer, spec.n);
+        return fx;
     }
 
     function ctrlRef(name) {
@@ -246,8 +248,12 @@
 
     function exBezierPoints() {
         return [
-            'var A = thisComp.layer("' + N_EMIT + '").transform.position.value;',
-            'var B = thisComp.layer("' + N_COLLECT + '").transform.position.value;',
+            // toComp, not transform.position: AEH_EMIT is parented, so its
+            // raw position is parent-relative and would land in the wrong place.
+            'var EL = thisComp.layer("' + N_EMIT + '");',
+            'var CL = thisComp.layer("' + N_COLLECT + '");',
+            'var A = EL.toComp(EL.transform.anchorPoint);',
+            'var B = CL.toComp(CL.transform.anchorPoint);',
             'var P0 = spend ? B : A;',
             'var P2 = spend ? A : B;',
             'var arc = C.effect("Arc Height")(1).value;',
@@ -302,7 +308,7 @@
     function exBarPosition() {
         return [
             'var S = thisComp.layer("' + N_SETUP + '");',
-            'var a = Math.round(S.effect("Bar Anchor")(1).value);',
+            'var a = clamp(Math.round(S.effect("Bar Anchor")(1).value), 1, 9);',
             'var off = S.effect("Bar Offset")(1).value;',
             'var r = sourceRectAtTime(time, false);',
             'var sx = Math.abs(transform.scale[0]) / 100;',
@@ -416,7 +422,7 @@
         return [
             'var B = thisComp.layer("' + N_BAR + '");',
             'var S = thisComp.layer("' + N_SETUP + '");',
-            'var a = Math.round(S.effect("Collect Anchor")(1).value);',
+            'var a = clamp(Math.round(S.effect("Collect Anchor")(1).value), 1, 9);',
             'var off = S.effect("Collect Offset")(1).value;',
             'var r = B.sourceRectAtTime(time, false);',
             'var col = (a - 1) % 3, row = Math.floor((a - 1) / 3);',
@@ -427,10 +433,13 @@
         ].join("\n");
     }
 
-    function exEmitPosition() {
+    // Drives AEH_EMIT_ANCHOR, the shy PARENT of AEH_EMIT. The emitter itself
+    // is left expression-free on purpose: the artist drags and keyframes it,
+    // while this parent keeps it glued to the comp anchor across resizes.
+    function exEmitAnchorPosition() {
         return [
             'var S = thisComp.layer("' + N_SETUP + '");',
-            'var a = Math.round(S.effect("Emitter Anchor")(1).value);',
+            'var a = clamp(Math.round(S.effect("Emitter Anchor")(1).value), 1, 9);',
             'var off = S.effect("Emitter Offset")(1).value;',
             'var col = (a - 1) % 3, row = Math.floor((a - 1) / 3);',
             'var xs = [0, thisComp.width/2, thisComp.width];',
@@ -536,12 +545,26 @@
             }
             col.property("ADBE Transform Group").property("ADBE Position").expression = exCollectPosition();
 
+            // Emitter = free null riding a shy anchor-driven parent, so it can
+            // be dragged and keyframed while still surviving comp resizes.
+            var eAnc = findLayer(comp, N_EMITANC);
+            if (!eAnc) {
+                eAnc = comp.layers.addNull(comp.duration);
+                eAnc.name = N_EMITANC; eAnc.label = 8;
+                eAnc.guideLayer = true; eAnc.shy = true;
+            }
+            eAnc.property("ADBE Transform Group").property("ADBE Position").expression = exEmitAnchorPosition();
+
             var emit = findLayer(comp, N_EMIT);
             if (!emit) {
                 emit = comp.layers.addNull(comp.duration);
                 emit.name = N_EMIT; emit.label = 11;
             }
-            emit.property("ADBE Transform Group").property("ADBE Position").expression = exEmitPosition();
+            var ep = emit.property("ADBE Transform Group").property("ADBE Position");
+            ep.expression = "";           // hand-placeable + keyframable
+            emit.parent = eAnc;
+            if (ep.numKeys === 0) ep.setValue([0, 0]); // sit on the anchor; keep any animation
+            emit.moveBefore(eAnc);
 
             // ---- blurred glowing RING around the bar ----
             // outer rect + inner rect, XOR'd via Merge Paths -> a true ring
@@ -603,6 +626,8 @@
     // core: turn `src` into the hidden coin template and (re)spawn the flock
     function coinsFrom(comp, src) {
         var setup = findLayer(comp, N_SETUP);
+        var coinsFx = getFx(setup, "Coins");
+        if (!coinsFx) throw new Error("AEH_SETUP has no 'Coins' control - re-run step 1.");
         src.name = N_COINSRC;
         src.enabled = false;
         src.shy = true;
@@ -612,7 +637,7 @@
             if (nm.indexOf(N_COIN) === 0 && nm !== N_COINSRC) comp.layer(i).remove();
         }
 
-        var n = Math.max(1, Math.round(getFx(setup, "Coins").property(1).value));
+        var n = Math.max(1, Math.round(coinsFx.property(1).value));
         for (var c = 0; c < n; c++) {
             var dcoin = src.duplicate();
             dcoin.name = N_COIN + (c + 1);
@@ -736,7 +761,8 @@
         try {
             var td = t.property("ADBE Text Properties").property("ADBE Text Document");
             var cur = parseFloat(String(td.value.text).replace(/[^0-9.\-]/g, ""));
-            if (!isNaN(cur)) getFx(findLayer(found.comp, N_CTRL), "Base Value").property(1).setValue(cur);
+            var bv = getFx(findLayer(found.comp, N_CTRL), "Base Value");
+            if (!isNaN(cur) && bv) bv.property(1).setValue(cur);
             td.expression = exCounterText(found.compRef);
         } catch (e) {
             alert(SCRIPT_NAME + " error: " + e.toString());
@@ -841,16 +867,17 @@
         var bSave = gPre.add("button", undefined, "Save current as defaults");
 
         var help = pal.add("statictext", undefined,
-            "Everyday knobs live on AEH_CTRL. Rig setup (anchors, offsets,\n" +
-            "coin count) is tucked on the shy AEH_SETUP null.\n" +
             "Markers: '+100' = gain (green), '-50' = spend (red).\n" +
+            "AEH_EMIT (point A) is a plain null - drag it, keyframe it freely.\n" +
+            "Everyday knobs are on AEH_CTRL; setup is on the shy AEH_SETUP.\n" +
+            "Anchor sliders are a 3x3 grid, 1..9: 1 = top-left, 5 = center,\n" +
+            "9 = bottom-right.\n" +
             "Swap the coin any time: 'Replace coin artwork...' - pick a file,\n" +
             "it imports and respawns the coins by itself.\n" +
             "Changed coin count on AEH_SETUP? Re-run step 3.\n" +
-            "Have a styled counter already? Select it, use step 5 (keeps the\n" +
-            "look, seeds Base Value from its current number).",
+            "Have a styled counter already? Select it, use step 5.",
             { multiline: true });
-        help.preferredSize.height = 110;
+        help.preferredSize.height = 122;
 
         b1.onClick = createController;
         b2.onClick = setupBar;
