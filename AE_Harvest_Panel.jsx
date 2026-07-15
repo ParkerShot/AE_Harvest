@@ -63,6 +63,7 @@
         { t: "slider", n: "Grow %" },
         { t: "slider", n: "Coin Scale" },
         { t: "check",  n: "Align Rotation" },
+        { t: "slider", n: "Bar Scale" },
         { t: "slider", n: "Pulse Amount" },
         { t: "slider", n: "Pulse Time" },
         { t: "slider", n: "Glow Width" },
@@ -73,6 +74,7 @@
         { t: "point",  n: "Glow Shift" },
         { t: "slider", n: "Glow Base" },
         { t: "slider", n: "Flash Amount" },
+        { t: "color",  n: "Idle Color" },
         { t: "color",  n: "Gain Color" },
         { t: "color",  n: "Spend Color" },
         { t: "slider", n: "Counter Start" },
@@ -101,6 +103,7 @@
         "Coin Scale": 100,
         "Align Rotation": 0,
         // bar feedback
+        "Bar Scale": 100,
         "Pulse Amount": 8,
         "Pulse Time": 0.3,
         // glow ring
@@ -112,6 +115,7 @@
         "Glow Shift": [0, 0],
         "Glow Base": 40,
         "Flash Amount": 100,
+        "Idle Color": [1, 1, 1, 1], // resting glow; gain/spend blend in on hits
         "Gain Color": [0.2, 1, 0.35, 1],
         "Spend Color": [1, 0.22, 0.22, 1],
         // counter
@@ -356,17 +360,27 @@
         ].join("\n");
     }
 
+    // Bar Scale resizes the bar from the controller; the layer's own Scale
+    // stays the baseline, so hand-scaled artwork keeps working. Everything
+    // that measures the bar (magnet, glow ring) reads this result, so they
+    // follow the new size on their own.
     function exBarScale() {
         return exPulseScan() + "\n" + [
             'var amp = C.effect("Pulse Amount")(1).value / 100;',
-            'value * (1 + amp * pulse)'
+            'var bs = C.effect("Bar Scale")(1).value / 100;',
+            'value * bs * (1 + amp * pulse)'
         ].join("\n");
     }
 
+    // At rest the ring is Idle Color; a hit blends Gain/Spend in by pulse
+    // strength. Reading Gain Color at rest is what made the bar permanently
+    // green even when nothing was being collected.
     function exFlashColor() {
         return exPulseScan() + "\n" + [
-            'pulseSpend ? C.effect("Spend Color")(1).value',
-            '           : C.effect("Gain Color")(1).value;'
+            'var idle = C.effect("Idle Color")(1).value;',
+            'var hit = pulseSpend ? C.effect("Spend Color")(1).value',
+            '                     : C.effect("Gain Color")(1).value;',
+            'idle + (hit - idle) * pulse'
         ].join("\n");
     }
 

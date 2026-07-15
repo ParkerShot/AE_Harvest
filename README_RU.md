@@ -56,6 +56,7 @@ macOS:   /Applications/Adobe After Effects <версия>/Scripts/ScriptUI Panel
 | Grow % | на скольких % пути монета вырастает из нуля (и гаснет в конце) |
 | Coin Scale | максимальный масштаб монеты |
 | Align Rotation | поворачивать монету по касательной к дуге |
+| Bar Scale | размер самого бара, %; магнит и кольцо подстраиваются сами |
 | Pulse Amount / Pulse Time | сила и длительность пульса бара |
 | Glow Width | толщина светящегося кольца |
 | Glow Roundness | внешнее скругление кольца |
@@ -63,9 +64,10 @@ macOS:   /Applications/Adobe After Effects <версия>/Scripts/ScriptUI Panel
 | Glow Radius | размытие свечения |
 | Glow Fit (X,Y) | подгонка размера кольца; **минус = плотнее к бару** |
 | Glow Shift (X,Y) | сдвиг кольца (если бокс несимметричен из-за иконки) |
-| Glow Base | постоянное свечение, 0..100 |
+| Glow Base | постоянное свечение, 0..100 (0 — только вспышки) |
 | Flash Amount | сила вспышки в момент сбора/траты |
-| Gain / Spend Color | цвета сбора и траты |
+| Idle Color | цвет свечения в покое; на вспышке в него подмешивается Gain/Spend |
+| Gain / Spend Color | цвета вспышки: сбор и трата |
 | Counter Start | первоначальное число счётчика |
 | Value per Burst | сумма по умолчанию, если у маркера нет числа |
 
