@@ -589,15 +589,78 @@
         app.endUndoGroup();
     }
 
+    // rig must exist before coins can reference it
+    function coinsReady(comp) {
+        if (!findLayer(comp, N_CTRL) || !findLayer(comp, N_SETUP)) {
+            alert(SCRIPT_NAME + ": create the controller first (step 1)."); return false;
+        }
+        if (!findLayer(comp, N_EMIT) || !findLayer(comp, N_COLLECT)) {
+            alert(SCRIPT_NAME + ": set up the bar first (step 2)."); return false;
+        }
+        return true;
+    }
+
+    // core: turn `src` into the hidden coin template and (re)spawn the flock
+    function coinsFrom(comp, src) {
+        var setup = findLayer(comp, N_SETUP);
+        src.name = N_COINSRC;
+        src.enabled = false;
+        src.shy = true;
+
+        for (var i = comp.numLayers; i >= 1; i--) {
+            var nm = comp.layer(i).name;
+            if (nm.indexOf(N_COIN) === 0 && nm !== N_COINSRC) comp.layer(i).remove();
+        }
+
+        var n = Math.max(1, Math.round(getFx(setup, "Coins").property(1).value));
+        for (var c = 0; c < n; c++) {
+            var dcoin = src.duplicate();
+            dcoin.name = N_COIN + (c + 1);
+            dcoin.enabled = true;
+            dcoin.shy = false;
+            var sl = getFx(dcoin, "Coin Index");
+            if (!sl) {
+                sl = fxGroup(dcoin).addProperty("ADBE Slider Control");
+                sl.name = "Coin Index";
+                sl = getFx(dcoin, "Coin Index");
+            }
+            sl.property(1).setValue(c);
+            var tr = dcoin.property("ADBE Transform Group");
+            tr.property("ADBE Position").expression = exCoinPosition();
+            tr.property("ADBE Scale").expression = exCoinScale();
+            tr.property("ADBE Opacity").expression = exCoinOpacity();
+            tr.property("ADBE Rotate Z").expression = exCoinRotation();
+            dcoin.moveAfter(findLayer(comp, N_CTRL));
+        }
+    }
+
+    // one-click artwork swap: pick a file, it becomes the coin. No layer
+    // juggling, no rebuild step - import, replace the template, respawn.
+    function replaceCoinArt() {
+        var comp = getComp();
+        if (!comp) return;
+        if (!coinsReady(comp)) return;
+
+        var f = File.openDialog("Pick the new coin artwork (PNG / PSD / AI / footage)");
+        if (!f) return;
+
+        app.beginUndoGroup(SCRIPT_NAME + ": replace coin");
+        try {
+            var item = app.project.importFile(new ImportOptions(f));
+            var lay = comp.layers.add(item);
+            var old = findLayer(comp, N_COINSRC);
+            if (old) old.remove();
+            coinsFrom(comp, lay);
+        } catch (e) {
+            alert(SCRIPT_NAME + " error: " + e.toString());
+        }
+        app.endUndoGroup();
+    }
+
     function buildCoins() {
         var comp = getComp();
         if (!comp) return;
-        var setup = findLayer(comp, N_SETUP);
-        var ctrl = findLayer(comp, N_CTRL);
-        if (!ctrl || !setup) { alert(SCRIPT_NAME + ": create the controller first (step 1)."); return; }
-        if (!findLayer(comp, N_EMIT) || !findLayer(comp, N_COLLECT)) {
-            alert(SCRIPT_NAME + ": set up the bar first (step 2)."); return;
-        }
+        if (!coinsReady(comp)) return;
 
         var src = null;
         if (comp.selectedLayers.length === 1 &&
@@ -610,35 +673,7 @@
 
         app.beginUndoGroup(SCRIPT_NAME + ": coins");
         try {
-            src.name = N_COINSRC;
-            src.enabled = false;
-            src.shy = true;
-
-            for (var i = comp.numLayers; i >= 1; i--) {
-                var nm = comp.layer(i).name;
-                if (nm.indexOf(N_COIN) === 0 && nm !== N_COINSRC) comp.layer(i).remove();
-            }
-
-            var n = Math.max(1, Math.round(getFx(setup, "Coins").property(1).value));
-            for (var c = 0; c < n; c++) {
-                var dcoin = src.duplicate();
-                dcoin.name = N_COIN + (c + 1);
-                dcoin.enabled = true;
-                dcoin.shy = false;
-                var sl = getFx(dcoin, "Coin Index");
-                if (!sl) {
-                    sl = fxGroup(dcoin).addProperty("ADBE Slider Control");
-                    sl.name = "Coin Index";
-                    sl = getFx(dcoin, "Coin Index");
-                }
-                sl.property(1).setValue(c);
-                var tr = dcoin.property("ADBE Transform Group");
-                tr.property("ADBE Position").expression = exCoinPosition();
-                tr.property("ADBE Scale").expression = exCoinScale();
-                tr.property("ADBE Opacity").expression = exCoinOpacity();
-                tr.property("ADBE Rotate Z").expression = exCoinRotation();
-                dcoin.moveAfter(findLayer(comp, N_CTRL));
-            }
+            coinsFrom(comp, src);
         } catch (e) {
             alert(SCRIPT_NAME + " error: " + e.toString());
         }
@@ -793,6 +828,12 @@
         bGain.preferredSize.width = 90;
         bSpend.preferredSize.width = 90;
 
+        var gArt = pal.add("panel", undefined, "Artwork");
+        gArt.orientation = "column";
+        gArt.alignChildren = ["fill", "top"];
+        gArt.margins = 10;
+        var bCoin = gArt.add("button", undefined, "Replace coin artwork...");
+
         var gPre = pal.add("panel", undefined, "Presets");
         gPre.orientation = "column";
         gPre.alignChildren = ["fill", "top"];
@@ -803,11 +844,13 @@
             "Everyday knobs live on AEH_CTRL. Rig setup (anchors, offsets,\n" +
             "coin count) is tucked on the shy AEH_SETUP null.\n" +
             "Markers: '+100' = gain (green), '-50' = spend (red).\n" +
+            "Swap the coin any time: 'Replace coin artwork...' - pick a file,\n" +
+            "it imports and respawns the coins by itself.\n" +
             "Changed coin count on AEH_SETUP? Re-run step 3.\n" +
             "Have a styled counter already? Select it, use step 5 (keeps the\n" +
             "look, seeds Base Value from its current number).",
             { multiline: true });
-        help.preferredSize.height = 92;
+        help.preferredSize.height = 110;
 
         b1.onClick = createController;
         b2.onClick = setupBar;
@@ -816,6 +859,7 @@
         b5.onClick = linkCounter;
         bGain.onClick = function () { addBurstMarker(false); };
         bSpend.onClick = function () { addBurstMarker(true); };
+        bCoin.onClick = replaceCoinArt;
         bSave.onClick = saveAsDefaults;
 
         pal.layout.layout(true);

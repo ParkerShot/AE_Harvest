@@ -6,3 +6,6 @@ AE_gag_coin_curve_set_up/
 *.aepx
 Adobe After Effects Auto-Save/
 *.log
+
+# Build artifact (regenerated)
+*.zip
