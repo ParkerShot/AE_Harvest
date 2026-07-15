@@ -6,15 +6,16 @@
 
 ## Установка
 
-Скопировать `AE_Harvest_Panel.jsx` в папку скриптов AE:
+**Windows:** закрыть AE → двойной клик по **`install.bat`** → подтвердить права администратора. Установщик сам найдёт все установленные версии AE и положит скрипт в `ScriptUI Panels`, перезаписав старую версию. Затем `Window → AE_Harvest_Panel.jsx`.
+
+**Вручную / macOS:** скопировать `AE_Harvest_Panel.jsx` в папку скриптов AE:
 
 ```
-C:\Program Files\Adobe\Adobe After Effects <версия>\Support Files\Scripts\ScriptUI Panels\
+Windows: C:\Program Files\Adobe\Adobe After Effects <версия>\Support Files\Scripts\ScriptUI Panels\
+macOS:   /Applications/Adobe After Effects <версия>/Scripts/ScriptUI Panels/
 ```
 
-(нужны права администратора), затем перезапустить AE → `Window → AE_Harvest_Panel.jsx`.
-
-Без установки: `File → Scripts → Run Script File...` — панель откроется плавающим окном.
+**Без установки:** `File → Scripts → Run Script File...` — панель откроется плавающим окном.
 
 > AE читает скрипты **при запуске**. После обновления файла — перезапуск.
 
