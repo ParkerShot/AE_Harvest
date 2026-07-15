@@ -1,0 +1,8 @@
+# Work assets (AppQuantum) — reference project, not part of the tool
+AE_gag_coin_curve_set_up/
+
+# After Effects noise
+*.aep
+*.aepx
+Adobe After Effects Auto-Save/
+*.log
