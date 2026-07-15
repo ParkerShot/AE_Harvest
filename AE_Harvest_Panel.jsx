@@ -51,6 +51,10 @@
     // coins auto-trail across ~60% of the flight (no user knob needed)
     var TRAIL = 0.6;
 
+    // the panel's coin-count field; the count itself lives on AEH_SETUP, but
+    // that null is shy, so the field is where anyone actually sets it.
+    var uiCoins = null;
+
     // ================= parameters & defaults =================
     // One table per null: type + display name. DEFAULTS holds the shipped
     // values; "Save current as defaults" overwrites them via a sidecar file.
@@ -217,6 +221,24 @@
 
     function ctrlRef(name) {
         return 'thisComp.layer("' + N_CTRL + '").effect("' + name + '")(1)';
+    }
+
+    // panel field -> AEH_SETUP, on every action that (re)spawns coins
+    function applyCoinsFromUI(setup) {
+        if (!uiCoins || !setup) return;
+        var n = parseInt(uiCoins.text, 10);
+        if (isNaN(n)) { syncCoinsToUI(setup); return; }
+        n = Math.max(1, Math.min(200, n));
+        uiCoins.text = String(n);
+        var fx = getFx(setup, "Coins");
+        if (fx) fx.property(1).setValue(n);
+    }
+
+    // AEH_SETUP -> panel field, so the panel shows the rig's real count
+    function syncCoinsToUI(setup) {
+        if (!uiCoins || !setup) return;
+        var fx = getFx(setup, "Coins");
+        if (fx) uiCoins.text = String(Math.round(fx.property(1).value));
     }
 
     // ================= expressions =================
@@ -510,6 +532,7 @@
             }
             for (var j = 0; j < SETUP_PARAMS.length; j++) ensureParam(setup, SETUP_PARAMS[j]);
             comp.shyLayers = true;
+            syncCoinsToUI(setup); // show this rig's real count in the panel
         } catch (e) {
             alert(SCRIPT_NAME + " error: " + e.toString());
         }
@@ -697,6 +720,7 @@
 
         app.beginUndoGroup(SCRIPT_NAME + ": replace coin");
         try {
+            applyCoinsFromUI(findLayer(comp, N_SETUP));
             var item = app.project.importFile(new ImportOptions(f));
             var lay = comp.layers.add(item);
             var old = findLayer(comp, N_COINSRC);
@@ -724,6 +748,7 @@
 
         app.beginUndoGroup(SCRIPT_NAME + ": coins");
         try {
+            applyCoinsFromUI(findLayer(comp, N_SETUP));
             coinsFrom(comp, src);
         } catch (e) {
             alert(SCRIPT_NAME + " error: " + e.toString());
@@ -867,6 +892,14 @@
         var b1 = gBuild.add("button", undefined, "1. Create / update controller");
         var b2 = gBuild.add("button", undefined, "2. Selected layer -> BAR (magnet + glow)");
         var b3 = gBuild.add("button", undefined, "3. Selected layer -> coins (build / rebuild)");
+
+        var gCnt = gBuild.add("group");
+        gCnt.orientation = "row";
+        gCnt.alignChildren = ["left", "center"];
+        gCnt.add("statictext", undefined, "Coins per burst:");
+        uiCoins = gCnt.add("edittext", undefined, String(DEFAULTS["Coins"]));
+        uiCoins.characters = 4;
+        uiCoins.helpTip = "How many coins fly per burst. Applied when you build/rebuild coins.";
         var b4 = gBuild.add("button", undefined, "4. Create NEW counter text");
         var b5 = gBuild.add("button", undefined, "5. Link SELECTED text -> counter");
 
@@ -901,10 +934,9 @@
             "9 = bottom-right.\n" +
             "Swap the coin any time: 'Replace coin artwork...' - pick a file,\n" +
             "it imports and respawns the coins by itself.\n" +
-            "Changed coin count on AEH_SETUP? Re-run step 3.\n" +
             "Have a styled counter already? Select it, use step 5.",
             { multiline: true });
-        help.preferredSize.height = 122;
+        help.preferredSize.height = 110;
 
         b1.onClick = createController;
         b2.onClick = setupBar;
