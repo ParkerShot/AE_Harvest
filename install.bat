@@ -5,6 +5,7 @@ title AE Harvest - installer
 echo.
 echo   ============================================
 echo    AE Harvest - installer
+echo    by Tim Parker - t.me/parkershot
 echo   ============================================
 echo.
 

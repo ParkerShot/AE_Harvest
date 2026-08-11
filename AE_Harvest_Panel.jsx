@@ -11,10 +11,16 @@
       - the collect point sticks to the bar,
       - the emitter point sticks to a comp anchor + offset.
 
-    Two control nulls keep the UI clean:
-      AEH_CTRL   - everyday knobs (flight feel, glow, colours, counter)
-      AEH_SETUP  - set-once rig setup (anchors, offsets, coin count).
-                   guide + shy, so it stays out of the way.
+    Three control nulls keep the UI clean:
+      AEH_CTRL      - everything about the FLIGHT: coins, speed, arc, the
+                       optional swarm scatter, and the counter's starting
+                       number.
+      AEH_BAR_CTRL  - everything about the BAR itself: its scale, position,
+                       the glow ring's geometry. Pulse strength and colours
+                       (green on gain, red on spend, white idle) are fixed
+                       on purpose.
+      AEH_SETUP     - set-once rig setup (anchors, offsets). guide + shy,
+                       so it stays out of the way.
 
     Flights are triggered by MARKERS on the AEH_CTRL layer:
       marker comment "+100"  -> gain burst (green, value +100)
@@ -31,6 +37,7 @@
 
     // -------- layer names (expressions depend on these!) --------
     var N_CTRL    = "AEH_CTRL";
+    var N_BARCTRL = "AEH_BAR_CTRL";
     var N_SETUP   = "AEH_SETUP";
     var N_BAR     = "AEH_BAR";
     var N_EMIT    = "AEH_EMIT";
@@ -39,7 +46,6 @@
     var N_COLLANC = "AEH_COLLECT_ANCHOR"; // bar-driven parent of AEH_COLLECT
     var N_FLASH   = "AEH_FLASH";     // legacy name, removed on rebuild
     var N_GLOW    = "AEH_GLOW";      // blurred glowing ring around the bar
-    var N_COUNTER = "AEH_COUNTER";
     var N_COIN    = "AEH_COIN_";     // prefix
     var N_COINSRC = "AEH_COIN_SRC";
 
@@ -48,46 +54,72 @@
     //   4 Mid-Left      5 Center          6 Mid-Right
     //   7 Bottom-Left   8 Bottom-Center   9 Bottom-Right
 
-    // coins auto-trail across ~60% of the flight (no user knob needed)
-    var TRAIL = 0.6;
+    // delivery formats built by "Go Resize". Edit to taste.
+    var SIZES = [[1080, 1080], [1080, 1350], [1080, 1920], [1920, 1080]];
 
 
     // ================= parameters & defaults =================
     // One table per null: type + display name. DEFAULTS holds the shipped
-    // values; "Save current as defaults" overwrites them via a sidecar file.
+    // starting values, seeded once when a control is first created.
 
+    // AEH_CTRL = FLIGHT: the coins' journey, start to finish, plus the
+    // counter's starting number. Value per Burst is gone - +GAIN/-SPEND
+    // always write an explicit amount into the marker, so a fallback was
+    // only ever hit by a marker typed in by hand with no number; that case
+    // now just uses 100.
+    // Trimmed hard: Align Rotation, the Echo-based Coin Trail Length/Fade
+    // (never read as a visible trail in practice), Coin Impact Flash, Swarm
+    // Cohesion (felt identical to Chaos) and Swarm Mid Bulge (felt identical
+    // to Coin Scale) are gone - fixed/removed rather than exposed. See
+    // exCoinPosition/exCoinScale for what each used to do.
     var CTRL_PARAMS = [
         { t: "slider", n: "Coins" },
+        { t: "slider", n: "Counter Start" }, // back on AEH_CTRL, right under Coins
         { t: "slider", n: "Flight Time" },
         { t: "slider", n: "Arc Height" },
-        { t: "slider", n: "Grow %" },
+        { t: "slider", n: "Start/End Scale" }, // was "Grow %"
         { t: "slider", n: "Coin Scale" },
-        { t: "check",  n: "Align Rotation" },
+        { t: "slider", n: "Coin Spacing" }, // was "Coin Trail Density"
+        { t: "slider", n: "Coin Glow" }, // emissive glow intensity on the coin, 0 = untouched
+        { t: "slider", n: "Coin Glow Radius" }, // how far that glow spreads/blurs outward
+        { t: "color",  n: "Coin Glow Color" }, // fixed tint - Glow sampling the art's own colours
+                                                // picks up a black outline as often as the fill
+        // swarm: off by default, so every existing rig keeps flying the
+        // single line it always has. Flip it on and Spread/Chaos start
+        // scattering that same base arc into a cloud.
+        { t: "check",  n: "Swarm Mode" },
+        { t: "slider", n: "Swarm Spread" },
+        { t: "slider", n: "Swarm Chaos" }
+    ];
+
+    // AEH_BAR_CTRL = BAR: how the bar itself looks and reacts, independent
+    // of how the coins got there. Pulse Amount/Time and the three colours
+    // are gone - fixed values baked into the expression (gain = green,
+    // spend = red, always), not exposed. Glow Base is gone too: the ring is
+    // fixed at zero idle glow now, invisible until a burst hits - it only
+    // ever lights up via Glow Int.
+    var BARCTRL_PARAMS = [
         { t: "slider", n: "Bar Scale" },
-        { t: "slider", n: "Pulse Amount" },
-        { t: "slider", n: "Pulse Time" },
+        { t: "point",  n: "Bar Offset" },
+        { t: "anchor", n: "Bar Anchor" },  // moved from AEH_SETUP - you need this from day one, not just once
         { t: "slider", n: "Glow Width" },
         { t: "slider", n: "Glow Roundness" },
         { t: "slider", n: "Glow Inner Roundness" },
-        { t: "slider", n: "Glow Radius" },
-        { t: "point",  n: "Glow Fit" },
-        { t: "point",  n: "Glow Shift" },
-        { t: "slider", n: "Glow Base" },
-        { t: "slider", n: "Flash Amount" },
-        { t: "color",  n: "Idle Color" },
-        { t: "color",  n: "Gain Color" },
-        { t: "color",  n: "Spend Color" },
-        { t: "slider", n: "Counter Start" },
-        { t: "slider", n: "Value per Burst" }
+        { t: "slider", n: "Glow Blur" },    // was "Glow Radius" - it's blur softness, not a literal radius
+        { t: "point",  n: "Glow Scale" },   // was "Glow Fit"
+        { t: "point",  n: "Glow Offset" },  // was "Glow Shift"
+        { t: "slider", n: "Glow Int" }      // was "Flash Amount" then "Flash Boost"
     ];
 
+    // AEH_SETUP = genuinely set-once-and-forget: where the coins start from
+    // and how they lock onto the bar. Bar Anchor/Offset moved out to
+    // AEH_BAR_CTRL - unlike these, you need it on day one, every time.
+    //
     // "anchor" = plain 1..9 slider (Top-Left .. Bottom-Right, reading rows
     // left-to-right). Deliberately NOT a Dropdown Menu Control: its
     // setPropertyParameters() silently fails on some AE builds, leaving a
     // 3-item menu behind -> "Value 5 out of range 1 to 3". A slider cannot.
     var SETUP_PARAMS = [
-        { t: "anchor", n: "Bar Anchor" },
-        { t: "point",  n: "Bar Offset" },
         { t: "anchor", n: "Emitter Anchor" },
         { t: "point",  n: "Emitter Offset" },
         { t: "anchor", n: "Collect Anchor" },
@@ -99,31 +131,30 @@
         "Coins": 8,
         "Flight Time": 0.8,
         "Arc Height": 300,
-        "Grow %": 12,
+        "Start/End Scale": 12,
         "Coin Scale": 100,
-        "Align Rotation": 0,
+        "Coin Spacing": 65,
+        "Coin Glow": 0,
+        "Coin Glow Radius": 20,
+        "Coin Glow Color": [1, 0.85, 0.15, 1],
+        // swarm (off by default)
+        "Swarm Mode": 0,
+        "Swarm Spread": 150,
+        "Swarm Chaos": 40,
         // bar feedback
-        "Bar Scale": 100,
-        "Pulse Amount": 8,
-        "Pulse Time": 0.3,
-        // glow ring
-        "Glow Width": 8,
-        "Glow Roundness": 40,
-        "Glow Inner Roundness": 20,
-        "Glow Radius": 12,
-        "Glow Fit": [0, 0],
-        "Glow Shift": [0, 0],
-        "Glow Base": 40,
-        "Flash Amount": 100,
-        "Idle Color": [1, 1, 1, 1], // resting glow; gain/spend blend in on hits
-        "Gain Color": [0.2, 1, 0.35, 1],
-        "Spend Color": [1, 0.22, 0.22, 1],
-        // counter
-        "Counter Start": 0,
-        "Value per Burst": 100,
-        // setup
+        "Bar Scale": 141,
         "Bar Anchor": 3,      // Top-Right
-        "Bar Offset": [40, 40],
+        "Bar Offset": [-35, 33],
+        // glow ring
+        "Glow Width": 11,
+        "Glow Roundness": 40,
+        "Glow Inner Roundness": 37,
+        "Glow Blur": 6,
+        "Glow Scale": [-100, -29],
+        "Glow Offset": [-36, 0],
+        "Glow Int": 84,
+        "Counter Start": 0,
+        // setup
         "Emitter Anchor": 5,  // Center
         "Emitter Offset": [0, 0],
         "Collect Anchor": 5,  // Center of bar
@@ -138,34 +169,6 @@
         check:  "ADBE Checkbox Control",
         menu:   "ADBE Dropdown Control" // legacy, only used to detect & migrate
     };
-
-    // ---- sidecar defaults (userData, no admin rights needed) ----
-    function prefsFile() {
-        return new File(Folder.userData.fsName + "/AE_Harvest_defaults.json");
-    }
-
-    function loadDefaults() {
-        var f = prefsFile();
-        if (!f.exists) return;
-        try {
-            f.open("r");
-            var s = f.read();
-            f.close();
-            var o = eval("(" + s + ")"); // our own file; ExtendScript has no JSON
-            for (var k in o) if (o.hasOwnProperty(k)) DEFAULTS[k] = o[k];
-        } catch (e) { /* corrupt prefs: fall back to shipped defaults */ }
-    }
-
-    function serialize(o) {
-        var parts = [];
-        for (var k in o) {
-            if (!o.hasOwnProperty(k)) continue;
-            var v = o[k];
-            var sv = (v instanceof Array) ? ("[" + v.join(", ") + "]") : String(v);
-            parts.push('  "' + k + '": ' + sv);
-        }
-        return "{\n" + parts.join(",\n") + "\n}";
-    }
 
     // ================= helpers =================
 
@@ -198,6 +201,20 @@
         }
     }
 
+    // like fxGroup(layer).addProperty(matchName), but never throws: a wrong
+    // or unavailable matchName just yields null instead of aborting whatever
+    // build step called it (an effect this cosmetic should never block the
+    // rest of the rig from getting built).
+    function tryAddEffect(layer, matchName, displayName) {
+        try {
+            var p = fxGroup(layer).addProperty(matchName);
+            p.name = displayName;
+            return getFx(layer, displayName);
+        } catch (e) {
+            return null;
+        }
+    }
+
     // add one param if missing, seeded from DEFAULTS; never touches an
     // existing one, so user tweaks survive a re-run of step 1.
     function ensureParam(layer, spec) {
@@ -220,8 +237,19 @@
         return fx;
     }
 
-    function ctrlRef(name) {
-        return 'thisComp.layer("' + N_CTRL + '").effect("' + name + '")(1)';
+    function barRef(name) {
+        return 'thisComp.layer("' + N_BARCTRL + '").effect("' + name + '")(1)';
+    }
+
+    // Sets an expression AND forces it on. The "Expression Enabled" toggle
+    // (the small "=" next to a property) can end up off - accidentally
+    // clicked while poking around, or left over from earlier troubleshooting
+    // - which leaves the formula sitting there unevaluated: the property just
+    // keeps its last static value, and turning a controller slider visibly
+    // does nothing. Every (re)build should leave properties actually live.
+    function setExpr(prop, expr) {
+        prop.expression = expr;
+        prop.expressionEnabled = true;
     }
 
 
@@ -242,13 +270,19 @@
             '        found = true;',
             '    } else { break; }',
             '}',
-            'if (isNaN(amt) || amt == 0) amt = C.effect("Value per Burst")(1).value;',
+            'if (isNaN(amt) || amt == 0) amt = 100;', // fallback for a hand-typed marker with no number - +GAIN/-SPEND always write one
             'var spend = amt < 0;',
             // sampled AT THE MARKER, not at `time`: Coins is animatable, and
             // reading it live would pop coins in and out mid-flight.
             'var n = Math.max(1, Math.round(C.effect("Coins")(1).valueAtTime(mt)));',
             'var live = idx < n;',
-            'var stag = d / n * ' + TRAIL + ';',
+            // Coin Spacing 0..100: 0 = spread thin across the whole flight
+            // (coins strung far apart), 100 = nearly simultaneous burst
+            // (coins bunched tight). Same mapping used everywhere spacing
+            // is computed.
+            'var trailD = C.effect("Coin Spacing")(1).value;',
+            'var trailFrac = Math.max(0.05, 1 - (trailD/100)*0.9);',
+            'var stag = d / n * trailFrac;',
             'var t0 = mt + idx * stag;',
             'var rawP = found ? clamp((time - t0) / d, 0, 1) : 0;',
             'var p = ease(rawP, 0, 1, 0, 1);'
@@ -273,17 +307,41 @@
         ].join("\n");
     }
 
+    // Swarm scatter is added ON TOP of the same base arc, not a replacement
+    // path: perpendicular offset per coin, enveloped by sin(PI*q) where
+    // q = p^skewExp. Using an EXPONENT (not a multiplier) on p is what
+    // guarantees the envelope is exactly 0 at p=0 and p=1 no matter what
+    // Chaos does to skewExp - a multiplier-based version of this let some
+    // coins arrive still carrying sideways offset, so they never quite
+    // landed on the bar. Random per-coin side/magnitude/phase are seeded
+    // from the coin's own index, so the shape is stable across scrubs and
+    // renders, not re-rolled every frame.
     function exCoinPosition() {
         return exMarkerScan() + "\n" + exBezierPoints() + "\n" + [
             'var u = 1 - p;',
-            '[u*u*P0[0] + 2*u*p*P1[0] + p*p*P2[0],',
-            ' u*u*P0[1] + 2*u*p*P1[1] + p*p*P2[1]]'
+            'var bx = u*u*P0[0] + 2*u*p*P1[0] + p*p*P2[0];',
+            'var by = u*u*P0[1] + 2*u*p*P1[1] + p*p*P2[1];',
+            'if (C.effect("Swarm Mode")(1).value > 0.5) {',
+            '    seedRandom(Math.round(idx) + 1, true);',
+            '    var side = (random() < 0.5) ? -1 : 1;',
+            '    var mag = random();', // was cohesion-biased; plain 0..1 now, one less knob
+            '    var phaseN = random()*2 - 1;',
+            '    var spread = C.effect("Swarm Spread")(1).value;',
+            '    var chaos = C.effect("Swarm Chaos")(1).value;',
+            '    var skewExp = Math.max(0.35, 1 + phaseN*(chaos/100)*0.9);',
+            '    var q = Math.pow(Math.min(1, Math.max(0, p)), skewExp);',
+            '    var env = Math.sin(Math.PI*q);',
+            '    var off = side * mag * spread * env;',
+            '    bx += perp[0]*off;',
+            '    by += perp[1]*off;',
+            '}',
+            '[bx, by]'
         ].join("\n");
     }
 
     function exCoinScale() {
         return exMarkerScan() + "\n" + [
-            'var g = clamp(C.effect("Grow %")(1).value, 1, 49) / 100;',
+            'var g = clamp(C.effect("Start/End Scale")(1).value, 1, 49) / 100;',
             'var s = C.effect("Coin Scale")(1).value;',
             'var f = 0;',
             'if (rawP > 0 && rawP < 1) {',
@@ -300,25 +358,29 @@
             '(found && live && rawP > 0 && rawP < 1) ? 100 : 0;';
     }
 
-    function exCoinRotation() {
-        return exMarkerScan() + "\n" + [
-            'if (C.effect("Align Rotation")(1).value < 0.5) { value; } else {',
-            exBezierPoints(),
-            '    var u = 1 - p;',
-            '    var D = [2*u*(P1[0]-P0[0]) + 2*p*(P2[0]-P1[0]),',
-            '             2*u*(P1[1]-P0[1]) + 2*p*(P2[1]-P1[1])];',
-            '    radiansToDegrees(Math.atan2(D[1], D[0]));',
-            '}'
-        ].join("\n");
+    // emissive bloom on the coin, tinted by Coin Glow Color (drives the real
+    // Glow effect's intensity). Coin Glow 0 = no glow; higher = brighter halo.
+    function exCoinGlow() {
+        return 'thisComp.layer("' + N_CTRL + '").effect("Coin Glow")(1).value / 100 * 2';
+    }
+
+    function exCoinGlowColor() {
+        return 'thisComp.layer("' + N_CTRL + '").effect("Coin Glow Color")(1).value';
+    }
+
+    // how far that glow spreads outward - AE's own default reads as barely
+    // more than edge brightening, so this is exposed instead of guessed.
+    function exCoinGlowRadius() {
+        return 'thisComp.layer("' + N_CTRL + '").effect("Coin Glow Radius")(1).value';
     }
 
     // bar magnet: snap flush to one of 9 comp anchors, then Bar Offset nudges
     // it INWARD (positive = into the comp) whichever corner is used.
     function exBarPosition() {
         return [
-            'var S = thisComp.layer("' + N_SETUP + '");',
-            'var a = clamp(Math.round(S.effect("Bar Anchor")(1).value), 1, 9);',
-            'var off = S.effect("Bar Offset")(1).value;',
+            'var BC = thisComp.layer("' + N_BARCTRL + '");',
+            'var a = clamp(Math.round(BC.effect("Bar Anchor")(1).value), 1, 9);',
+            'var off = BC.effect("Bar Offset")(1).value;',
             'var r = sourceRectAtTime(time, false);',
             'var sx = Math.abs(transform.scale[0]) / 100;',
             'var sy = Math.abs(transform.scale[1]) / 100;',
@@ -337,17 +399,20 @@
     function exPulseScan() {
         return [
             'var C = thisComp.layer("' + N_CTRL + '");',
+            'var BC = thisComp.layer("' + N_BARCTRL + '");',
             'var d = Math.max(0.05, C.effect("Flight Time")(1).value);',
-            'var pt = Math.max(0.05, C.effect("Pulse Time")(1).value);',
+            'var pt = 0.3;', // fixed pulse duration - no longer user-exposed
             'var mk = C.marker;',
             'var pulse = 0, pulseSpend = false;',
             'for (var k = 1; k <= mk.numKeys; k++) {',
             '    var tb = mk.key(k).time;',
             '    var amt = parseFloat(mk.key(k).comment);',
-            '    if (isNaN(amt) || amt == 0) amt = C.effect("Value per Burst")(1).value;',
+            '    if (isNaN(amt) || amt == 0) amt = 100;', // fallback for a hand-typed marker with no number
             '    var sp = amt < 0;',
             '    var n = Math.max(1, Math.round(C.effect("Coins")(1).valueAtTime(tb)));',
-            '    var stag = d / n * ' + TRAIL + ';',
+            '    var trailD = C.effect("Coin Spacing")(1).value;',
+            '    var trailFrac = Math.max(0.05, 1 - (trailD/100)*0.9);',
+            '    var stag = d / n * trailFrac;',
             '    for (var i = 0; i < n; i++) {',
             '        var ta = sp ? (tb + i*stag) : (tb + i*stag + d);',
             '        var dt = time - ta;',
@@ -366,29 +431,38 @@
     // follow the new size on their own.
     function exBarScale() {
         return exPulseScan() + "\n" + [
-            'var amp = C.effect("Pulse Amount")(1).value / 100;',
-            'var bs = C.effect("Bar Scale")(1).value / 100;',
+            'var amp = 0.08;', // fixed pulse strength - no longer user-exposed
+            'var bs = BC.effect("Bar Scale")(1).value / 100;',
             'value * bs * (1 + amp * pulse)'
         ].join("\n");
     }
 
-    // At rest the ring is Idle Color; a hit blends Gain/Spend in by pulse
-    // strength. Reading Gain Color at rest is what made the bar permanently
-    // green even when nothing was being collected.
+    // At rest the ring is white; a hit blends in flat green (gain) or red
+    // (spend) by pulse strength - fixed, not a colour the user repoints.
     function exFlashColor() {
         return exPulseScan() + "\n" + [
-            'var idle = C.effect("Idle Color")(1).value;',
-            'var hit = pulseSpend ? C.effect("Spend Color")(1).value',
-            '                     : C.effect("Gain Color")(1).value;',
+            'var idle = [1, 1, 1, 1];',
+            'var hit = pulseSpend ? [1, 0.22, 0.22, 1] : [0.2, 1, 0.35, 1];',
             'idle + (hit - idle) * pulse'
         ].join("\n");
     }
 
     function exGlowOpacity() {
         return exPulseScan() + "\n" + [
-            'var base = C.effect("Glow Base")(1).value;',
-            'var amp = C.effect("Flash Amount")(1).value;',
-            'clamp(base + pulse * amp, 0, 100)'
+            'var amp = BC.effect("Glow Int")(1).value;',
+            'clamp(pulse * amp, 0, 100)' // zero idle glow, fixed - lights up only on a burst
+        ].join("\n");
+    }
+
+    // Opacity alone tops out at 100% - past that, cranking Glow Int did
+    // nothing visible. This adds a second channel: once pulse*amp pushes
+    // past the point where the ring is already fully opaque, the excess
+    // drives an exposure overdrive (in stops) instead, so a high Glow Int
+    // genuinely punches harder rather than just plateauing.
+    function exGlowOverdrive() {
+        return exPulseScan() + "\n" + [
+            'var amp = BC.effect("Glow Int")(1).value;',
+            'clamp((pulse * amp - 100) / 100 * 1.2, 0, 3)'
         ].join("\n");
     }
 
@@ -398,10 +472,10 @@
     function exGlowOuterSize() {
         return [
             'var B = thisComp.layer("' + N_BAR + '");',
-            'var C = thisComp.layer("' + N_CTRL + '");',
+            'var BC = thisComp.layer("' + N_BARCTRL + '");',
             'var r = B.sourceRectAtTime(time, false);',
             'var s = B.transform.scale.value;',
-            'var fit = C.effect("Glow Fit")(1).value;',
+            'var fit = BC.effect("Glow Scale")(1).value;',
             'var w = r.width  * Math.abs(s[0])/100 + fit[0];',
             'var h = r.height * Math.abs(s[1])/100 + fit[1];',
             '[Math.max(0, w), Math.max(0, h)]'
@@ -414,11 +488,11 @@
     function exGlowInnerSize() {
         return [
             'var B = thisComp.layer("' + N_BAR + '");',
-            'var C = thisComp.layer("' + N_CTRL + '");',
+            'var BC = thisComp.layer("' + N_BARCTRL + '");',
             'var r = B.sourceRectAtTime(time, false);',
             'var s = B.transform.scale.value;',
-            'var fit = C.effect("Glow Fit")(1).value;',
-            'var gw = C.effect("Glow Width")(1).value;',
+            'var fit = BC.effect("Glow Scale")(1).value;',
+            'var gw = BC.effect("Glow Width")(1).value;',
             'var w = r.width  * Math.abs(s[0])/100 + fit[0] - gw*2;',
             'var h = r.height * Math.abs(s[1])/100 + fit[1] - gw*2;',
             '[Math.max(0, w), Math.max(0, h)]'
@@ -428,9 +502,9 @@
     function exGlowPosition() {
         return [
             'var B = thisComp.layer("' + N_BAR + '");',
-            'var C = thisComp.layer("' + N_CTRL + '");',
+            'var BC = thisComp.layer("' + N_BARCTRL + '");',
             'var r = B.sourceRectAtTime(time, false);',
-            'var sh = C.effect("Glow Shift")(1).value;',
+            'var sh = BC.effect("Glow Offset")(1).value;',
             'var c = B.toComp([r.left + r.width/2, r.top + r.height/2]);',
             '[c[0] + sh[0], c[1] + sh[1]]'
         ].join("\n");
@@ -479,9 +553,11 @@
             'for (var k = 1; k <= mk.numKeys; k++) {',
             '    var tb = mk.key(k).time;',
             '    var amt = parseFloat(mk.key(k).comment);',
-            '    if (isNaN(amt) || amt == 0) amt = C.effect("Value per Burst")(1).value;',
+            '    if (isNaN(amt) || amt == 0) amt = 100;', // fallback for a hand-typed marker with no number
             '    var n = Math.max(1, Math.round(C.effect("Coins")(1).valueAtTime(tb)));',
-            '    var stag = d / n * ' + TRAIL + ';',
+            '    var trailD = C.effect("Coin Spacing")(1).value;',
+            '    var trailFrac = Math.max(0.05, 1 - (trailD/100)*0.9);',
+            '    var stag = d / n * trailFrac;',
             '    var per = amt / n;',
             '    for (var i = 0; i < n; i++) {',
             '        var ta = (amt < 0) ? (tb + i*stag) : (tb + i*stag + d);',
@@ -492,12 +568,23 @@
         ].join("\n");
     }
 
+    // Keeps the digits growing symmetrically around a fixed Position instead
+    // of drifting as the digit count changes: point text's anchorPoint sits
+    // at the left edge of the typed text by default, so "0" -> "100" -> "1000"
+    // visibly shifts. Re-measuring the live text box each frame and pinning
+    // the anchor to its centre makes growth happen evenly on both sides.
+    function exCounterAnchor() {
+        return [
+            'var r = thisLayer.sourceRectAtTime(time, false);',
+            '[r.left + r.width/2, r.top + r.height/2]'
+        ].join("\n");
+    }
+
     // ================= build steps =================
 
     function createController() {
         var comp = getComp();
         if (!comp) return;
-        loadDefaults();
         app.beginUndoGroup(SCRIPT_NAME + ": controller");
         try {
             var ctrl = findLayer(comp, N_CTRL);
@@ -507,7 +594,35 @@
                 ctrl.label = 14;
                 ctrl.moveToBeginning();
             }
+
+            var barCtrl = findLayer(comp, N_BARCTRL);
+            if (!barCtrl) {
+                barCtrl = comp.layers.addNull(comp.duration);
+                barCtrl.name = N_BARCTRL;
+                barCtrl.label = 9;
+                barCtrl.moveAfter(ctrl);
+            }
+
             for (var i = 0; i < CTRL_PARAMS.length; i++) ensureParam(ctrl, CTRL_PARAMS[i]);
+            for (var bi = 0; bi < BARCTRL_PARAMS.length; bi++) ensureParam(barCtrl, BARCTRL_PARAMS[bi]);
+
+            // renamed controls: carry the tuned value from the old display
+            // name to the new one, then drop the stale copy.
+            function migrateRename(layer, oldName, newName) {
+                var old = getFx(layer, oldName);
+                if (old) {
+                    var fresh = getFx(layer, newName);
+                    if (fresh) fresh.property(1).setValue(old.property(1).value);
+                    removeFx(layer, [oldName]);
+                }
+            }
+            migrateRename(ctrl, "Coin Trail Density", "Coin Spacing");
+            migrateRename(barCtrl, "Glow Radius", "Glow Blur");
+            migrateRename(barCtrl, "Glow Fit", "Glow Scale");
+            migrateRename(barCtrl, "Glow Shift", "Glow Offset");
+            migrateRename(barCtrl, "Flash Amount", "Flash Boost");
+            migrateRename(barCtrl, "Flash Boost", "Glow Int");
+            migrateRename(ctrl, "Grow %", "Start/End Scale");
 
             // carry an older rig's "Base Value" over to the clearer name
             var oldBase = getFx(ctrl, "Base Value");
@@ -517,11 +632,39 @@
                 removeFx(ctrl, ["Base Value"]);
             }
 
-            // clear anything from older builds / params that moved to SETUP
+            // a brief in-between version of this script put Counter Start on
+            // AEH_BAR_CTRL - move it straight back to AEH_CTRL if found there
+            var barSideStart = getFx(barCtrl, "Counter Start");
+            if (barSideStart) {
+                var ctrlSideStart = getFx(ctrl, "Counter Start");
+                if (ctrlSideStart) ctrlSideStart.property(1).setValue(barSideStart.property(1).value);
+                removeFx(barCtrl, ["Counter Start"]);
+            }
+
+            // Pre-split rigs had bar-feedback controls sitting on AEH_CTRL
+            // alongside everything else. Carry each tuned value over to the
+            // new AEH_BAR_CTRL, then drop the stale copy - nothing to redo.
+            for (var mi = 0; mi < BARCTRL_PARAMS.length; mi++) {
+                var pname = BARCTRL_PARAMS[mi].n;
+                var stale = getFx(ctrl, pname);
+                if (stale) {
+                    var fresh = getFx(barCtrl, pname);
+                    if (fresh) fresh.property(1).setValue(stale.property(1).value);
+                    removeFx(ctrl, [pname]);
+                }
+            }
+
+            // clear anything from older builds / params that moved to SETUP,
+            // or were cut outright (fixed value baked into the expression now)
             removeFx(ctrl, ["Bar Anchor", "Bar Margin", "Bar Margin X", "Bar Margin Y",
                 "Bar Offset", "Emitter Anchor", "Emitter Offset", "Collect Anchor",
                 "Collect Offset", "Stagger", "Coin Trail",
-                "Flash Opacity", "Glow Size", "Glow Intensity"]);
+                "Flash Opacity", "Glow Size", "Glow Intensity",
+                "Align Rotation", "Coin Trail Length", "Coin Trail Fade",
+                "Coin Impact Flash", "Swarm Cohesion", "Swarm Mid Bulge",
+                "Value per Burst"]);
+            removeFx(barCtrl, ["Pulse Amount", "Pulse Time",
+                "Idle Color", "Gain Color", "Spend Color", "Glow Base", "Glow Color"]);
 
             var setup = findLayer(comp, N_SETUP);
             if (!setup) {
@@ -530,7 +673,7 @@
                 setup.label = 8;
                 setup.guideLayer = true;
                 setup.shy = true;
-                setup.moveAfter(ctrl);
+                setup.moveAfter(barCtrl);
             }
             for (var j = 0; j < SETUP_PARAMS.length; j++) ensureParam(setup, SETUP_PARAMS[j]);
 
@@ -542,17 +685,100 @@
                 if (cc) cc.property(1).setValue(oldCoins.property(1).value);
                 removeFx(setup, ["Coins"]);
             }
-            comp.shyLayers = true;
+
+            // Bar Anchor/Offset used to live here too; move to AEH_BAR_CTRL,
+            // next to Bar Scale, since you need these on day one to place the
+            // bar - not the kind of "set once and forget" the rest of SETUP is.
+            var oldBarAnchor = getFx(setup, "Bar Anchor");
+            if (oldBarAnchor) {
+                var freshAnchor = getFx(barCtrl, "Bar Anchor");
+                if (freshAnchor) freshAnchor.property(1).setValue(oldBarAnchor.property(1).value);
+                removeFx(setup, ["Bar Anchor"]);
+            }
+            var oldBarOffset = getFx(setup, "Bar Offset");
+            if (oldBarOffset) {
+                var freshOffset = getFx(barCtrl, "Bar Offset");
+                if (freshOffset) freshOffset.property(1).setValue(oldBarOffset.property(1).value);
+                removeFx(setup, ["Bar Offset"]);
+            }
+
+            // force the Effect Controls order to match the tables above, every
+            // time - reordering the array alone only affects newly-created
+            // properties, not ones an older rig already built.
+            function reorderParams(layer, params) {
+                for (var pi = 0; pi < params.length; pi++) {
+                    var pfx = getFx(layer, params[pi].n);
+                    if (pfx) { try { pfx.moveTo(pi + 1); } catch (eR) {} }
+                }
+            }
+            reorderParams(ctrl, CTRL_PARAMS);
+            reorderParams(barCtrl, BARCTRL_PARAMS);
+            reorderParams(setup, SETUP_PARAMS);
+
+            // the panel-wide toggle is hideShyLayers, not shyLayers (that name
+            // doesn't exist on CompItem - it silently did nothing, leaving every
+            // AEH_COIN_* row visible even though each layer's own .shy was true)
+            comp.hideShyLayers = true;
         } catch (e) {
             alert(SCRIPT_NAME + " error: " + e.toString());
         }
         app.endUndoGroup();
     }
 
+    // blurred glowing RING around the bar: outer rect + inner rect XOR'd via
+    // Merge Paths (a true ring, so the inner edge has its own roundness),
+    // filled, blurred, ADD, sitting behind the bar. Always rebuilt from
+    // scratch so it replaces any older version.
+    function buildGlow(comp) {
+        var oldF = findLayer(comp, N_FLASH); if (oldF) oldF.remove();
+        var oldG = findLayer(comp, N_GLOW);  if (oldG) oldG.remove();
+
+        var glow = comp.layers.addShape();
+        glow.name = N_GLOW;
+        glow.blendingMode = BlendingMode.ADD;
+        glow.shy = true; // it is driven end to end; no reason to sit in the timeline
+        var grp = glow.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
+        grp.name = "GlowRing";
+        var gVec = grp.property("ADBE Vectors Group");
+
+        // NOTE: addProperty() invalidates sibling references, so every shape
+        // property is configured right after it is added.
+        var outer = gVec.addProperty("ADBE Vector Shape - Rect");
+        setExpr(outer.property("ADBE Vector Rect Size"), exGlowOuterSize());
+        setExpr(outer.property("ADBE Vector Rect Roundness"), barRef("Glow Roundness"));
+
+        var inner = gVec.addProperty("ADBE Vector Shape - Rect");
+        setExpr(inner.property("ADBE Vector Rect Size"), exGlowInnerSize());
+        setExpr(inner.property("ADBE Vector Rect Roundness"), barRef("Glow Inner Roundness"));
+
+        var merge = gVec.addProperty("ADBE Vector Filter - Merge");
+        merge.property("ADBE Vector Merge Type").setValue(5); // Exclude Intersections
+
+        var fill = gVec.addProperty("ADBE Vector Graphic - Fill");
+        setExpr(fill.property("ADBE Vector Fill Color"), exFlashColor());
+
+        var gt = glow.property("ADBE Transform Group");
+        setExpr(gt.property("ADBE Position"), exGlowPosition());
+        setExpr(gt.property("ADBE Opacity"), exGlowOpacity());
+
+        var blur = fxGroup(glow).addProperty("ADBE Box Blur2");
+        blur.name = "Glow Blur";
+        blur = getFx(glow, "Glow Blur");
+        setExpr(blur.property("Blur Radius"), barRef("Glow Blur"));
+        try { blur.property("Repeat Edge Pixels").setValue(1); } catch (eB) {}
+
+        var over = tryAddEffect(glow, "ADBE Exposure2", "Glow Overdrive");
+        if (over) setExpr(over.property("ADBE Exposure2-0003"), exGlowOverdrive()); // master Exposure (stops)
+
+        var bar = findLayer(comp, N_BAR);
+        if (bar) glow.moveAfter(bar); // behind the bar
+        return glow;
+    }
+
     function setupBar() {
         var comp = getComp();
         if (!comp) return;
-        if (!findLayer(comp, N_CTRL) || !findLayer(comp, N_SETUP)) {
+        if (!findLayer(comp, N_CTRL) || !findLayer(comp, N_BARCTRL) || !findLayer(comp, N_SETUP)) {
             alert(SCRIPT_NAME + ": create the controller first (step 1)."); return;
         }
 
@@ -572,8 +798,8 @@
             bar.name = N_BAR;
             if (bar.threeDLayer) bar.threeDLayer = false;
             var tr = bar.property("ADBE Transform Group");
-            tr.property("ADBE Position").expression = exBarPosition();
-            tr.property("ADBE Scale").expression = exBarScale();
+            setExpr(tr.property("ADBE Position"), exBarPosition());
+            setExpr(tr.property("ADBE Scale"), exBarScale());
 
             // Collect = free null riding a shy bar-driven parent, so it can be
             // dragged and keyframed while still following the bar.
@@ -583,7 +809,7 @@
                 cAnc.name = N_COLLANC; cAnc.label = 8;
                 cAnc.guideLayer = true; cAnc.shy = true;
             }
-            cAnc.property("ADBE Transform Group").property("ADBE Position").expression = exCollectAnchorPosition();
+            setExpr(cAnc.property("ADBE Transform Group").property("ADBE Position"), exCollectAnchorPosition());
 
             var col = findLayer(comp, N_COLLECT);
             if (!col) {
@@ -606,7 +832,7 @@
                 eAnc.name = N_EMITANC; eAnc.label = 8;
                 eAnc.guideLayer = true; eAnc.shy = true;
             }
-            eAnc.property("ADBE Transform Group").property("ADBE Position").expression = exEmitAnchorPosition();
+            setExpr(eAnc.property("ADBE Transform Group").property("ADBE Position"), exEmitAnchorPosition());
 
             var emit = findLayer(comp, N_EMIT);
             if (!emit) {
@@ -619,46 +845,7 @@
             if (ep.numKeys === 0) ep.setValue([0, 0]); // sit on the anchor; keep any animation
             emit.moveBefore(eAnc);
 
-            // ---- blurred glowing RING around the bar ----
-            // outer rect + inner rect, XOR'd via Merge Paths -> a true ring
-            // whose inner edge has its own roundness. Filled, blurred, ADD.
-            var oldF = findLayer(comp, N_FLASH); if (oldF) oldF.remove();
-            var oldG = findLayer(comp, N_GLOW);  if (oldG) oldG.remove();
-
-            var glow = comp.layers.addShape();
-            glow.name = N_GLOW;
-            glow.blendingMode = BlendingMode.ADD;
-            var grp = glow.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
-            grp.name = "GlowRing";
-            var gVec = grp.property("ADBE Vectors Group");
-
-            // NOTE: addProperty() invalidates sibling references, so every
-            // shape property is configured right after it is added.
-            var outer = gVec.addProperty("ADBE Vector Shape - Rect");
-            outer.property("ADBE Vector Rect Size").expression = exGlowOuterSize();
-            outer.property("ADBE Vector Rect Roundness").expression = ctrlRef("Glow Roundness");
-
-            var inner = gVec.addProperty("ADBE Vector Shape - Rect");
-            inner.property("ADBE Vector Rect Size").expression = exGlowInnerSize();
-            inner.property("ADBE Vector Rect Roundness").expression = ctrlRef("Glow Inner Roundness");
-
-            var merge = gVec.addProperty("ADBE Vector Filter - Merge");
-            merge.property("ADBE Vector Merge Type").setValue(5); // Exclude Intersections
-
-            var fill = gVec.addProperty("ADBE Vector Graphic - Fill");
-            fill.property("ADBE Vector Fill Color").expression = exFlashColor();
-
-            var gt = glow.property("ADBE Transform Group");
-            gt.property("ADBE Position").expression = exGlowPosition();
-            gt.property("ADBE Opacity").expression = exGlowOpacity();
-
-            var blur = fxGroup(glow).addProperty("ADBE Box Blur2");
-            blur.name = "Glow Blur";
-            blur = getFx(glow, "Glow Blur");
-            blur.property("Blur Radius").expression = ctrlRef("Glow Radius");
-            try { blur.property("Repeat Edge Pixels").setValue(1); } catch (eB) {}
-
-            glow.moveAfter(findLayer(comp, N_BAR)); // behind the bar
+            buildGlow(comp);
 
             // Rebuilding the rig changes how coins must read the endpoints
             // (e.g. parenting made positions parent-relative), so refresh any
@@ -685,8 +872,13 @@
     // core: turn `src` into the hidden coin template and (re)spawn the flock
     // Coins is animatable, but coin layers are physical duplicates that cannot
     // appear mid-render. So build a pool big enough for the busiest burst:
-    // sample Coins at every marker and take the max (never below the current
-    // value, for a rig with no markers yet).
+    // sample Coins at every marker and take the max - and never less than
+    // POOL_FLOOR, so raising the Coins slider later (up to that floor) just
+    // works without a rebuild. Below POOL_FLOOR was the #1 point of
+    // confusion: "I raised Coins and nothing changed" - it hadn't, because
+    // the physical layers to show more simply didn't exist yet.
+    var POOL_FLOOR = 60;
+
     function coinPoolSize(ctrl) {
         var fx = getFx(ctrl, "Coins");
         if (!fx) throw new Error("AEH_CTRL has no 'Coins' control - re-run step 1.");
@@ -697,6 +889,7 @@
             var v = Math.round(p.valueAtTime(mk.keyTime(k), false));
             if (v > maxN) maxN = v;
         }
+        maxN = Math.max(maxN, POOL_FLOOR);
         return Math.max(1, Math.min(200, maxN));
     }
 
@@ -716,7 +909,7 @@
             var dcoin = src.duplicate();
             dcoin.name = N_COIN + (c + 1);
             dcoin.enabled = true;
-            dcoin.shy = false;
+            dcoin.shy = true; // fully expression-driven; keeps the timeline short
             var sl = getFx(dcoin, "Coin Index");
             if (!sl) {
                 sl = fxGroup(dcoin).addProperty("ADBE Slider Control");
@@ -725,35 +918,29 @@
             }
             sl.property(1).setValue(c);
             var tr = dcoin.property("ADBE Transform Group");
-            tr.property("ADBE Position").expression = exCoinPosition();
-            tr.property("ADBE Scale").expression = exCoinScale();
-            tr.property("ADBE Opacity").expression = exCoinOpacity();
-            tr.property("ADBE Rotate Z").expression = exCoinRotation();
-            dcoin.moveAfter(findLayer(comp, N_CTRL));
+            setExpr(tr.property("ADBE Position"), exCoinPosition());
+            setExpr(tr.property("ADBE Scale"), exCoinScale());
+            setExpr(tr.property("ADBE Opacity"), exCoinOpacity());
+
+            var gl = getFx(dcoin, "Coin Glow FX") || tryAddEffect(dcoin, "ADBE Glo2", "Coin Glow FX");
+            if (gl) {
+                setExpr(gl.property("ADBE Glo2-0004"), exCoinGlow()); // Glow Intensity
+                setExpr(gl.property("ADBE Glo2-0003"), exCoinGlowRadius()); // Glow Radius
+                // AE's own Threshold default (~60%) means anything short of
+                // near-white never triggers glow at all - fixed low, not
+                // exposed, so Coin Glow/Radius actually do something visible.
+                try { gl.property("ADBE Glo2-0002").setValue(10); } catch (eT) {} // Glow Threshold
+                // "Original Colors" samples the art itself - on this coin
+                // that's as likely to be its black outline as its fill. A & B
+                // Colors with A=B locks the glow to one fixed, user-set tint.
+                try { gl.property("ADBE Glo2-0007").setValue(2); } catch (eC) {} // Glow Colors: A & B Colors
+                try { gl.property("ADBE Glo2-0008").setValue(false); } catch (eL) {} // Color Looping off
+                setExpr(gl.property("ADBE Glo2-0012"), exCoinGlowColor()); // Color A
+                setExpr(gl.property("ADBE Glo2-0013"), exCoinGlowColor()); // Color B
+            }
+
+            dcoin.moveAfter(ctrl);
         }
-    }
-
-    // one-click artwork swap: pick a file, it becomes the coin. No layer
-    // juggling, no rebuild step - import, replace the template, respawn.
-    function replaceCoinArt() {
-        var comp = getComp();
-        if (!comp) return;
-        if (!coinsReady(comp)) return;
-
-        var f = File.openDialog("Pick the new coin artwork (PNG / PSD / AI / footage)");
-        if (!f) return;
-
-        app.beginUndoGroup(SCRIPT_NAME + ": replace coin");
-        try {
-            var item = app.project.importFile(new ImportOptions(f));
-            var lay = comp.layers.add(item);
-            var old = findLayer(comp, N_COINSRC);
-            if (old) old.remove();
-            coinsFrom(comp, lay);
-        } catch (e) {
-            alert(SCRIPT_NAME + " error: " + e.toString());
-        }
-        app.endUndoGroup();
     }
 
     function buildCoins() {
@@ -779,35 +966,81 @@
         app.endUndoGroup();
     }
 
-    function createCounter() {
-        var comp = getComp();
-        if (!comp) return;
-        var ctrl = findLayer(comp, N_CTRL);
-        var bar = findLayer(comp, N_BAR);
-        if (!ctrl || !bar) { alert(SCRIPT_NAME + ": run steps 1 and 2 first."); return; }
+    // ================= delivery sizes =================
 
-        app.beginUndoGroup(SCRIPT_NAME + ": counter");
+    function findCompByName(name) {
+        for (var i = 1; i <= app.project.numItems; i++) {
+            var it = app.project.item(i);
+            if (it instanceof CompItem && it.name === name) return it;
+        }
+        return null;
+    }
+
+    function ensureFolder(name) {
+        for (var i = 1; i <= app.project.numItems; i++) {
+            var it = app.project.item(i);
+            if (it instanceof FolderItem && it.name === name) return it;
+        }
+        return app.project.items.addFolder(name);
+    }
+
+    // Stamp the delivery formats off the current comp: a straight duplicate,
+    // renamed and resized. Doesn't require a rig to already be built - works
+    // on any comp, so sizes can be stamped first and the rig built into each
+    // one after, if that's the order you prefer. When a rig IS already
+    // present, every expression in it reads "thisComp", so each copy is a
+    // fully independent rig from the moment it exists - its own AEH_CTRL,
+    // own markers, own everything. Nothing here ever points back at the comp
+    // it was made from.
+    //
+    // That is deliberate: earlier this stripped each copy's AEH_CTRL and had
+    // it read the source comp's by hardcoded name (comp("Name")) instead, to
+    // keep one shared set of markers. It broke the moment that comp got
+    // renamed or deleted - which is the normal way to finish this workflow
+    // (build a master, stamp sizes, throw the master away). Independent
+    // copies cost you re-editing each size by hand if you tweak timing after
+    // stamping, but they cannot break this way.
+    function makeSizes() {
+        var master = getComp();
+        if (!master) return;
+
+        var made = [], reused = [];
+
+        app.beginUndoGroup(SCRIPT_NAME + ": delivery sizes");
         try {
-            var t = findLayer(comp, N_COUNTER);
-            if (!t) {
-                t = comp.layers.addText("0");
-                t.name = N_COUNTER;
-                var doc = t.property("ADBE Text Properties").property("ADBE Text Document").value;
-                doc.fontSize = 60;
-                doc.fillColor = [1, 1, 1];
-                doc.justification = ParagraphJustification.CENTER_JUSTIFY;
-                t.property("ADBE Text Properties").property("ADBE Text Document").setValue(doc);
-                t.parent = bar;
-                var r = bar.sourceRectAtTime(0, false);
-                t.property("ADBE Transform Group").property("ADBE Position")
-                    .setValue([r.left + r.width / 2, r.top + r.height / 2 + 20]);
+            var folder = ensureFolder(master.name + " sizes");
+            for (var i = 0; i < SIZES.length; i++) {
+                var w = SIZES[i][0], h = SIZES[i][1];
+                var nm = master.name + "_" + w + "x" + h;
+                var c = findCompByName(nm);
+                if (c) {
+                    reused.push(nm); // already made - leave it alone
+                    continue;
+                }
+                c = master.duplicate();
+                c.name = nm;
+                c.width = w;
+                c.height = h;
+                c.parentFolder = folder;
+                made.push(nm);
             }
-            t.property("ADBE Text Properties").property("ADBE Text Document").expression = exCounterText();
-            t.moveBefore(bar);
         } catch (e) {
             alert(SCRIPT_NAME + " error: " + e.toString());
+            app.endUndoGroup();
+            return;
         }
         app.endUndoGroup();
+
+        var msg = SCRIPT_NAME + ": delivery sizes ready in folder \"" + master.name + " sizes\".\n\n";
+        if (made.length) msg += "Created: " + made.join(", ") + "\n";
+        if (reused.length) msg += "Already existed, left untouched: " + reused.join(", ") + "\n";
+        msg += "\nEach size is a fully independent copy - if there's a rig on this comp,\n" +
+               "that includes its own markers, sliders, colours, everything. Safe to\n" +
+               "rename or delete this comp afterward.\n\n" +
+               "Editing this comp now will NOT reach sizes already made. To pick up\n" +
+               "changes, either edit before stamping, or delete a size comp and\n" +
+               "re-run to get a fresh copy.";
+        alert(msg);
     }
 
     function findController(fromComp) {
@@ -832,16 +1065,54 @@
         if (!found) { alert(SCRIPT_NAME + ": couldn't find AEH_CTRL - run step 1 first."); return; }
 
         app.beginUndoGroup(SCRIPT_NAME + ": link counter");
+        var apShifted = false;
         try {
             var td = t.property("ADBE Text Properties").property("ADBE Text Document");
             var cur = parseFloat(String(td.value.text).replace(/[^0-9.\-]/g, ""));
             var bv = getFx(findLayer(found.comp, N_CTRL), "Counter Start");
             if (!isNaN(cur) && bv) bv.property(1).setValue(cur);
-            td.expression = exCounterText(found.compRef);
+            setExpr(td, exCounterText(found.compRef));
+
+            // re-centering the anchor point moves where Position visually
+            // lands (on-screen spot = Position - AnchorPoint), so nudge
+            // Position by the same delta to keep this counter exactly where
+            // it already was, then hand the anchor to the live-centering
+            // expression so future digit-count changes grow symmetrically.
+            var atr = t.property("ADBE Transform Group");
+            var apProp = atr.property("ADBE Anchor Point");
+            var posProp = atr.property("ADBE Position");
+            var oldAP = apProp.value;
+            var r = t.sourceRectAtTime(comp.time, false);
+            var newAP = [r.left + r.width / 2, r.top + r.height / 2];
+            if (posProp.numKeys === 0) {
+                var curPos = posProp.value;
+                posProp.setValue([curPos[0] + (newAP[0] - oldAP[0]), curPos[1] + (newAP[1] - oldAP[1])]);
+                apShifted = true;
+            }
+            setExpr(apProp, exCounterAnchor());
         } catch (e) {
             alert(SCRIPT_NAME + " error: " + e.toString());
+            app.endUndoGroup();
+            return;
         }
         app.endUndoGroup();
+
+        if (!apShifted) {
+            alert(SCRIPT_NAME + ": this counter's Position has its own keyframes,\n" +
+                "so its anchor point could not be auto-compensated. The number\n" +
+                "will now grow symmetrically from its centre going forward, but\n" +
+                "check its placement - it may have shifted slightly.");
+        }
+
+        // AEH_CTRL wasn't in this comp, so the link had to hardcode the other
+        // comp's NAME - the one thing that breaks it forever is renaming or
+        // deleting that comp. Say so now, while it's actionable.
+        if (found.compRef !== "thisComp") {
+            alert(SCRIPT_NAME + ": linked to AEH_CTRL in \"" + found.comp.name + "\".\n\n" +
+                "This only works as long as that comp keeps this exact name.\n" +
+                "Renaming or deleting \"" + found.comp.name + "\" will break this counter -\n" +
+                "if that happens, just select the text layer and run this again.");
+        }
     }
 
     function addBurstMarker(isSpend) {
@@ -865,36 +1136,6 @@
         app.endUndoGroup();
     }
 
-    // read the current rig's values and make them the defaults for every
-    // rig built from now on (stored next to the AE prefs, no admin needed).
-    function saveAsDefaults() {
-        var comp = getComp();
-        if (!comp) return;
-        var ctrl = findLayer(comp, N_CTRL);
-        var setup = findLayer(comp, N_SETUP);
-        if (!ctrl || !setup) { alert(SCRIPT_NAME + ": no rig in this comp - run step 1 first."); return; }
-
-        var out = {}, i, fx;
-        for (i = 0; i < CTRL_PARAMS.length; i++) {
-            fx = getFx(ctrl, CTRL_PARAMS[i].n);
-            if (fx) out[CTRL_PARAMS[i].n] = fx.property(1).value;
-        }
-        for (i = 0; i < SETUP_PARAMS.length; i++) {
-            fx = getFx(setup, SETUP_PARAMS[i].n);
-            if (fx) out[SETUP_PARAMS[i].n] = fx.property(1).value;
-        }
-        try {
-            var f = prefsFile();
-            f.open("w");
-            f.write(serialize(out));
-            f.close();
-            for (var k in out) if (out.hasOwnProperty(k)) DEFAULTS[k] = out[k];
-            alert(SCRIPT_NAME + ": saved as defaults.\n" + f.fsName);
-        } catch (e) {
-            alert(SCRIPT_NAME + " error: " + e.toString());
-        }
-    }
-
     // ================= UI =================
 
     function buildUI(thisObj) {
@@ -915,8 +1156,7 @@
         var b1 = gBuild.add("button", undefined, "1. Create / update controller");
         var b2 = gBuild.add("button", undefined, "2. Selected layer -> BAR (magnet + glow)");
         var b3 = gBuild.add("button", undefined, "3. Selected layer -> coins (build / rebuild)");
-        var b4 = gBuild.add("button", undefined, "4. Create NEW counter text");
-        var b5 = gBuild.add("button", undefined, "5. Link SELECTED text -> counter");
+        var b4 = gBuild.add("button", undefined, "4. Link SELECTED text -> counter");
 
         var gMark = pal.add("panel", undefined, "Bursts (markers on AEH_CTRL)");
         gMark.orientation = "row";
@@ -928,43 +1168,23 @@
         bGain.preferredSize.width = 90;
         bSpend.preferredSize.width = 90;
 
-        var gArt = pal.add("panel", undefined, "Artwork");
-        gArt.orientation = "column";
-        gArt.alignChildren = ["fill", "top"];
-        gArt.margins = 10;
-        var bCoin = gArt.add("button", undefined, "Replace coin artwork...");
-
-        var gPre = pal.add("panel", undefined, "Presets");
-        gPre.orientation = "column";
-        gPre.alignChildren = ["fill", "top"];
-        gPre.margins = 10;
-        var bSave = gPre.add("button", undefined, "Save current as defaults");
-
-        var help = pal.add("statictext", undefined,
-            "Markers: '+100' = gain (green), '-50' = spend (red).\n" +
-            "Spend reverses the flight: coins leave AEH_COLLECT for AEH_EMIT.\n" +
-            "AEH_EMIT and AEH_COLLECT are plain nulls - drag / keyframe both.\n" +
-            "Everyday knobs are on AEH_CTRL; setup is on the shy AEH_SETUP.\n" +
-            "Anchor sliders are a 3x3 grid, 1..9: 1 = top-left, 5 = center,\n" +
-            "9 = bottom-right.\n" +
-            "Counter's starting number = 'Counter Start' on AEH_CTRL.\n" +
-            "'Coins' (AEH_CTRL) is keyframable - it is read at each marker, so\n" +
-            "bursts can differ. Raised it past the built flock? Re-run step 3.\n" +
-            "Swap the coin any time: 'Replace coin artwork...' - pick a file,\n" +
-            "it imports and respawns the coins by itself.\n" +
-            "Have a styled counter already? Select it, use step 5.",
-            { multiline: true });
-        help.preferredSize.height = 134;
+        var gExtra = pal.add("panel", undefined, "Extras");
+        gExtra.orientation = "row";
+        gExtra.alignChildren = ["fill", "top"];
+        gExtra.margins = 10;
+        var bSizes = gExtra.add("button", undefined, "Go Resize");
+        var sizeList = [];
+        for (var si = 0; si < SIZES.length; si++) sizeList.push(SIZES[si][0] + "x" + SIZES[si][1]);
+        bSizes.helpTip = "Duplicates this comp into " + sizeList.join(", ") +
+            " - each a fully independent rig. Safe to delete this comp afterward.";
 
         b1.onClick = createController;
         b2.onClick = setupBar;
         b3.onClick = buildCoins;
-        b4.onClick = createCounter;
-        b5.onClick = linkCounter;
+        b4.onClick = linkCounter;
         bGain.onClick = function () { addBurstMarker(false); };
         bSpend.onClick = function () { addBurstMarker(true); };
-        bCoin.onClick = replaceCoinArt;
-        bSave.onClick = saveAsDefaults;
+        bSizes.onClick = makeSizes;
 
         pal.layout.layout(true);
         pal.onResizing = pal.onResize = function () { this.layout.resize(); };
@@ -973,7 +1193,6 @@
         return pal;
     }
 
-    loadDefaults();
     buildUI(thisObj);
 
 })(this);
