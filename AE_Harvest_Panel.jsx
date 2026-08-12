@@ -360,8 +360,11 @@
 
     // emissive bloom on the coin, tinted by Coin Glow Color (drives the real
     // Glow effect's intensity). Coin Glow 0 = no glow; higher = brighter halo.
+    // /10 puts AE's own "looks right when you drag Glow on by hand" value
+    // (Intensity 1.0) at Coin Glow 10 - the old /100*2 needed Coin Glow 50
+    // just to get there, so small values like 4 read as basically nothing.
     function exCoinGlow() {
-        return 'thisComp.layer("' + N_CTRL + '").effect("Coin Glow")(1).value / 100 * 2';
+        return 'thisComp.layer("' + N_CTRL + '").effect("Coin Glow")(1).value / 10';
     }
 
     function exCoinGlowColor() {
@@ -451,18 +454,6 @@
         return exPulseScan() + "\n" + [
             'var amp = BC.effect("Glow Int")(1).value;',
             'clamp(pulse * amp, 0, 100)' // zero idle glow, fixed - lights up only on a burst
-        ].join("\n");
-    }
-
-    // Opacity alone tops out at 100% - past that, cranking Glow Int did
-    // nothing visible. This adds a second channel: once pulse*amp pushes
-    // past the point where the ring is already fully opaque, the excess
-    // drives an exposure overdrive (in stops) instead, so a high Glow Int
-    // genuinely punches harder rather than just plateauing.
-    function exGlowOverdrive() {
-        return exPulseScan() + "\n" + [
-            'var amp = BC.effect("Glow Int")(1).value;',
-            'clamp((pulse * amp - 100) / 100 * 1.2, 0, 3)'
         ].join("\n");
     }
 
@@ -735,7 +726,10 @@
 
         var glow = comp.layers.addShape();
         glow.name = N_GLOW;
-        glow.blendingMode = BlendingMode.ADD;
+        // Normal, not Add: Add sums light onto the background and washes out
+        // toward white as intensity climbs - reads as a "glowing" haze, not a
+        // deep, saturated colour. Normal shows the actual fill colour as-is.
+        glow.blendingMode = BlendingMode.NORMAL;
         glow.shy = true; // it is driven end to end; no reason to sit in the timeline
         var grp = glow.property("ADBE Root Vectors Group").addProperty("ADBE Vector Group");
         grp.name = "GlowRing";
@@ -766,9 +760,6 @@
         blur = getFx(glow, "Glow Blur");
         setExpr(blur.property("Blur Radius"), barRef("Glow Blur"));
         try { blur.property("Repeat Edge Pixels").setValue(1); } catch (eB) {}
-
-        var over = tryAddEffect(glow, "ADBE Exposure2", "Glow Overdrive");
-        if (over) setExpr(over.property("ADBE Exposure2-0003"), exGlowOverdrive()); // master Exposure (stops)
 
         var bar = findLayer(comp, N_BAR);
         if (bar) glow.moveAfter(bar); // behind the bar
@@ -816,7 +807,6 @@
                 col = comp.layers.addNull(comp.duration);
                 col.name = N_COLLECT; col.label = 11;
             }
-            col.guideLayer = true;
             col.shy = false;
             var cp = col.property("ADBE Transform Group").property("ADBE Position");
             cp.expression = "";            // hand-placeable + keyframable
@@ -968,9 +958,9 @@
 
     // ================= delivery sizes =================
 
-    function findCompByName(name) {
-        for (var i = 1; i <= app.project.numItems; i++) {
-            var it = app.project.item(i);
+    function findCompInFolder(folder, name) {
+        for (var i = 1; i <= folder.numItems; i++) {
+            var it = folder.item(i);
             if (it instanceof CompItem && it.name === name) return it;
         }
         return null;
@@ -1000,6 +990,16 @@
     // (build a master, stamp sizes, throw the master away). Independent
     // copies cost you re-editing each size by hand if you tweak timing after
     // stamping, but they cannot break this way.
+    //
+    // All sizes land in one shared "#RENDER" folder, named by resolution
+    // alone (no master-comp prefix). A same-named comp with matching pixel
+    // dimensions is treated as an earlier stamp of this same size - reused,
+    // untouched, same as before. Only a genuine collision (same name, wrong
+    // dimensions - i.e. it belongs to a different master) falls back to
+    // prefixing the master comp's name, so plain resolution names are the
+    // common case and disambiguation only kicks in when actually needed.
+    var RENDER_FOLDER = "#RENDER";
+
     function makeSizes() {
         var master = getComp();
         if (!master) return;
@@ -1008,16 +1008,23 @@
 
         app.beginUndoGroup(SCRIPT_NAME + ": delivery sizes");
         try {
-            var folder = ensureFolder(master.name + " sizes");
+            var folder = ensureFolder(RENDER_FOLDER);
             for (var i = 0; i < SIZES.length; i++) {
                 var w = SIZES[i][0], h = SIZES[i][1];
-                var nm = master.name + "_" + w + "x" + h;
-                var c = findCompByName(nm);
-                if (c) {
-                    reused.push(nm); // already made - leave it alone
+                var base = w + "x" + h;
+                var existing = findCompInFolder(folder, base);
+                if (existing && existing.width === w && existing.height === h) {
+                    reused.push(base); // already made - leave it alone
                     continue;
                 }
-                c = master.duplicate();
+                var nm = base;
+                if (existing) {
+                    // name taken by something of a different size - disambiguate
+                    nm = master.name + "_" + base;
+                    var n = 2;
+                    while (findCompInFolder(folder, nm)) nm = master.name + "_" + base + "_" + (n++);
+                }
+                var c = master.duplicate();
                 c.name = nm;
                 c.width = w;
                 c.height = h;
@@ -1031,7 +1038,7 @@
         }
         app.endUndoGroup();
 
-        var msg = SCRIPT_NAME + ": delivery sizes ready in folder \"" + master.name + " sizes\".\n\n";
+        var msg = SCRIPT_NAME + ": delivery sizes ready in folder \"" + RENDER_FOLDER + "\".\n\n";
         if (made.length) msg += "Created: " + made.join(", ") + "\n";
         if (reused.length) msg += "Already existed, left untouched: " + reused.join(", ") + "\n";
         msg += "\nEach size is a fully independent copy - if there's a rig on this comp,\n" +
