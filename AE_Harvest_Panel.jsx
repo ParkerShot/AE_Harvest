@@ -1050,15 +1050,42 @@
         alert(msg);
     }
 
+    // If more than one comp has its own AEH_CTRL (an abandoned step-1-only
+    // test comp is a common way this happens), don't just grab whichever one
+    // the project happens to list first - that silently links to the wrong
+    // rig with no sign anything went wrong. Prefer a comp where the rig is
+    // actually built out (has AEH_BAR); if that still doesn't narrow it to
+    // one, stop and say so instead of guessing.
     function findController(fromComp) {
         if (findLayer(fromComp, N_CTRL)) return { compRef: "thisComp", comp: fromComp };
+
+        var candidates = [];
         for (var i = 1; i <= app.project.numItems; i++) {
             var it = app.project.item(i);
             if (it instanceof CompItem && it.id !== fromComp.id && findLayer(it, N_CTRL)) {
-                return { compRef: 'comp("' + it.name.replace(/"/g, '\\"') + '")', comp: it };
+                candidates.push(it);
             }
         }
-        return null;
+        if (candidates.length === 0) return null;
+
+        var pick = candidates[0];
+        if (candidates.length > 1) {
+            var built = [];
+            for (var b = 0; b < candidates.length; b++) {
+                if (findLayer(candidates[b], N_BAR)) built.push(candidates[b]);
+            }
+            if (built.length === 1) {
+                pick = built[0];
+            } else {
+                var names = [];
+                for (var n = 0; n < candidates.length; n++) names.push(candidates[n].name);
+                alert(SCRIPT_NAME + ": AEH_CTRL exists in more than one composition (" +
+                    names.join(", ") + ") and it isn't clear which one you mean.\n\n" +
+                    "Delete or rename the AEH_CTRL in whichever comp is stale/unused, then run this again.");
+                return null;
+            }
+        }
+        return { compRef: 'comp("' + pick.name.replace(/"/g, '\\"') + '")', comp: pick };
     }
 
     function linkCounter() {
